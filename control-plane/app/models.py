@@ -310,6 +310,24 @@ class OIDCConfig(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
+class K8sCVEScanResult(Base):
+    """Per-cluster Kubernetes CVE scan result — one row per scan run."""
+    __tablename__ = "k8s_cve_scan_results"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("cluster_registrations.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    scanned_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    cluster_version = Column(String, nullable=True)          # e.g. "1.29.3"
+    node_versions = Column(JSON, nullable=True)              # ["1.29.2", "1.29.3"]
+    addons = Column(JSON, nullable=True)                     # [{"name", "version", "namespace", "workload"}]
+    total_cves_checked = Column(Integer, default=0)
+    affected_count = Column(Integer, default=0)
+    findings = Column(JSON, nullable=True)                   # list of finding dicts
+    status = Column(String, default="completed")             # completed | failed
+    error = Column(Text, nullable=True)
+    cluster = relationship("ClusterRegistration")
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
