@@ -25,7 +25,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
-from .models import CVEFeed, CVEEntry, CVEScanResult, K8sCVEScanResult, ClusterRegistration
+from .models import CVEFeed, CVEEntry, CVEScanResult, K8sCVEScanResult, ClusterRegistration, ScanContext
 from .addon_detection import ADDON_IMAGE_PATTERNS, image_version as _image_version
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,51 @@ def _cvss_to_severity(score: Optional[float]) -> str:
     if score >= 4.0:
         return "MEDIUM"
     return "LOW"
+
+
+# ── Contextual Risk Score ──────────────────────────────────────────────────────
+# Score = base severity × environment weight × data classification weight ×
+#         compliance scope weight × exposure weight — see project_usp.md.
+# The point is not the number, it's that every finding says *why* it ranks
+# where it does, instead of a flat CVSS sort every competitor already does.
+
+_SEVERITY_BASE = {"CRITICAL": 9.5, "HIGH": 7.5, "MEDIUM": 5.5, "LOW": 2.5, "UNKNOWN": 1.0}
+_ENV_WEIGHT = {"production": 1.5, "staging": 1.2, "dev": 0.5}
+_DATA_CLASS_WEIGHT = {"pii": 1.5, "financial": 1.5, "phi": 1.5, "internal": 1.0, "public": 0.8}
+_EXPOSURE_WEIGHT = {"internet-facing": 1.4, "internal": 1.0}
+
+
+def _contextual_score(
+    cvss_score: Optional[float], severity: str, context: dict
+) -> tuple[float, dict]:
+    """
+    Compute an explainable Contextual Risk Score for one finding.
+
+    Returns (score, factors) where `factors` names each multiplier applied,
+    so the score is never a black box — it's the whole point of the feature.
+    """
+    base = cvss_score if cvss_score is not None else _SEVERITY_BASE.get(severity, 1.0)
+
+    environment = context.get("environment", "production")
+    data_classification = context.get("data_classification", "internal")
+    compliance_scope = context.get("compliance_scope") or []
+    exposure = context.get("exposure", "internal")
+
+    env_weight = _ENV_WEIGHT.get(environment, 1.0)
+    data_weight = _DATA_CLASS_WEIGHT.get(data_classification, 1.0)
+    compliance_weight = 1.3 if compliance_scope else 1.0
+    exposure_weight = _EXPOSURE_WEIGHT.get(exposure, 1.0)
+
+    score = base * env_weight * data_weight * compliance_weight * exposure_weight
+
+    factors = {
+        "base_severity": {"value": severity, "cvss_score": cvss_score, "weight": round(base, 2)},
+        "environment": {"value": environment, "weight": env_weight},
+        "data_classification": {"value": data_classification, "weight": data_weight},
+        "compliance_scope": {"value": compliance_scope, "weight": compliance_weight},
+        "exposure": {"value": exposure, "weight": exposure_weight},
+    }
+    return round(score, 2), factors
 
 
 def _strip_html(text: str) -> str:
@@ -483,6 +528,7 @@ def _match_cves(
     server_version: str,
     node_versions: list[str],
     addons: list[dict],
+    context: Optional[dict] = None,
 ) -> list[dict]:
     """
     Compare CVE entries against the collected cluster inventory.
@@ -542,11 +588,16 @@ def _match_cves(
                         break
 
         if affected_matches:
+            contextual_score, score_factors = _contextual_score(
+                entry.cvss_score, entry.severity, context or {}
+            )
             findings.append({
                 "cve_id": entry.cve_id,
                 "title": entry.title,
                 "severity": entry.severity,
                 "cvss_score": entry.cvss_score,
+                "contextual_score": contextual_score,
+                "score_factors": score_factors,
                 "affected": affected_matches,
                 "fixed_in": entry.fixed_in,
                 "description": (entry.description or "")[:500],
@@ -554,8 +605,7 @@ def _match_cves(
                 "published_date": entry.published_date.isoformat() if entry.published_date else None,
             })
 
-    sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
-    findings.sort(key=lambda x: (sev_order.get(x["severity"], 4), -(x["cvss_score"] or 0)))
+    findings.sort(key=lambda x: -x["contextual_score"])
     return findings
 
 
@@ -664,7 +714,26 @@ class CVEFeedService:
             logger.warning(f"Could not query in-cluster inventory: {e}")
         return server_version, all_versions, addons
 
-    def scan_cluster(self, db: Session) -> dict:
+    def get_or_create_scan_context(self, db: Session, tenant_id: UUID) -> ScanContext:
+        """Load this tenant's risk context, seeding sensible defaults on first access."""
+        context = db.query(ScanContext).filter(ScanContext.tenant_id == tenant_id).first()
+        if not context:
+            context = ScanContext(tenant_id=tenant_id)
+            db.add(context)
+            db.commit()
+            db.refresh(context)
+        return context
+
+    @staticmethod
+    def _context_to_dict(context: ScanContext) -> dict:
+        return {
+            "environment": context.environment,
+            "data_classification": context.data_classification,
+            "compliance_scope": context.compliance_scope or [],
+            "exposure": context.exposure,
+        }
+
+    def scan_cluster(self, db: Session, tenant_id: UUID) -> dict:
         server_version, versions_to_check, addons = self._collect_cluster_inventory()
         entries = (
             db.query(CVEEntry)
@@ -673,7 +742,8 @@ class CVEFeedService:
             .all()
         )
         node_versions = sorted(versions_to_check - {server_version})
-        findings = _match_cves(entries, server_version, node_versions, addons)
+        context = self._context_to_dict(self.get_or_create_scan_context(db, tenant_id))
+        findings = _match_cves(entries, server_version, node_versions, addons, context)
 
         result = CVEScanResult(
             cluster_version=server_version,
@@ -756,7 +826,13 @@ class CVEFeedService:
                 .all()
             )
 
-            findings = _match_cves(entries, server_version, node_versions, addons)
+            context = {
+                "environment": cluster.environment,
+                "data_classification": cluster.data_classification,
+                "compliance_scope": cluster.compliance_scope or [],
+                "exposure": cluster.exposure,
+            }
+            findings = _match_cves(entries, server_version, node_versions, addons, context)
 
             # Persist result
             scan_result.cluster_version = server_version

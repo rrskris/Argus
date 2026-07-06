@@ -13,6 +13,10 @@ from ..models import CVEFeed, CVEEntry, ClusterRegistration, K8sCVEScanResult
 from ..cve_service import cve_service, K8S_FEED_NAME, K8S_OFFICIAL_CVE_FEED_URL
 from ..report_service import build_cve_scan_pdf
 
+VALID_ENVIRONMENTS = {"production", "staging", "dev"}
+VALID_DATA_CLASSIFICATIONS = {"public", "internal", "pii", "financial", "phi"}
+VALID_EXPOSURES = {"internet-facing", "internal"}
+
 router = APIRouter(prefix="/cve", tags=["CVE"])
 
 
@@ -23,6 +27,13 @@ class FeedCreate(BaseModel):
     url: str
     feed_type: str = "auto"          # auto | json_feed | osv | nvd
     description: Optional[str] = None
+
+
+class ScanContextUpdate(BaseModel):
+    environment: Optional[str] = None
+    data_classification: Optional[str] = None
+    compliance_scope: Optional[list[str]] = None
+    exposure: Optional[str] = None
 
 
 # ── Feed management ────────────────────────────────────────────────────────────
@@ -174,6 +185,60 @@ def list_entries(
     }
 
 
+# ── Risk context (drives the Contextual Risk Score) ───────────────────────────
+
+def _context_response(context) -> dict:
+    return {
+        "environment": context.environment,
+        "data_classification": context.data_classification,
+        "compliance_scope": context.compliance_scope or [],
+        "exposure": context.exposure,
+        "updated_at": context.updated_at.isoformat() if context.updated_at else None,
+    }
+
+
+@router.get("/context")
+def get_scan_context(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_active_user),
+):
+    """
+    Return this tenant's risk context — environment, data classification,
+    compliance scope, and exposure — used to compute the Contextual Risk
+    Score for every finding. Auto-creates sensible defaults on first access.
+    """
+    context = cve_service.get_or_create_scan_context(db, user.tenant_id)
+    return _context_response(context)
+
+
+@router.put("/context")
+def update_scan_context(
+    body: ScanContextUpdate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_active_user),
+):
+    """Update the tenant's risk context. Only provided fields are changed."""
+    if body.environment is not None and body.environment not in VALID_ENVIRONMENTS:
+        raise HTTPException(400, f"environment must be one of {sorted(VALID_ENVIRONMENTS)}")
+    if body.data_classification is not None and body.data_classification not in VALID_DATA_CLASSIFICATIONS:
+        raise HTTPException(400, f"data_classification must be one of {sorted(VALID_DATA_CLASSIFICATIONS)}")
+    if body.exposure is not None and body.exposure not in VALID_EXPOSURES:
+        raise HTTPException(400, f"exposure must be one of {sorted(VALID_EXPOSURES)}")
+
+    context = cve_service.get_or_create_scan_context(db, user.tenant_id)
+    if body.environment is not None:
+        context.environment = body.environment
+    if body.data_classification is not None:
+        context.data_classification = body.data_classification
+    if body.compliance_scope is not None:
+        context.compliance_scope = body.compliance_scope
+    if body.exposure is not None:
+        context.exposure = body.exposure
+    db.commit()
+    db.refresh(context)
+    return _context_response(context)
+
+
 # ── Cluster scan ───────────────────────────────────────────────────────────────
 
 @router.post("/scan")
@@ -182,7 +247,7 @@ def run_scan(
     user=Depends(get_current_active_user),
 ):
     """Scan the live cluster against all CVEs in enabled feeds."""
-    return cve_service.scan_cluster(db)
+    return cve_service.scan_cluster(db, user.tenant_id)
 
 
 @router.get("/scan/latest")

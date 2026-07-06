@@ -170,6 +170,22 @@ class CVEEntry(Base):
     feed = relationship("CVEFeed", back_populates="entries")
 
 
+class ScanContext(Base):
+    """
+    Tenant-scoped risk context for the Contextual Risk Score — feeds the
+    environment/data-classification/compliance/exposure multipliers used to
+    rank CVE findings by business impact instead of raw CVSS alone.
+    One row per tenant; read/written via GET|PUT /cve/context.
+    """
+    __tablename__ = "scan_contexts"
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), primary_key=True)
+    environment = Column(String, default="production")            # production | staging | dev
+    data_classification = Column(String, default="internal")      # public | internal | pii | financial | phi
+    compliance_scope = Column(JSON, default=list)                  # e.g. ["PCI-DSS", "HIPAA"]
+    exposure = Column(String, default="internal")                 # internet-facing | internal
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
 class CVEScanResult(Base):
     __tablename__ = "cve_scan_results"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -289,7 +305,10 @@ class ClusterRegistration(Base):
     api_server_url = Column(String, nullable=False)
     bearer_token = Column(Text, nullable=False)
     ca_cert_pem = Column(Text, nullable=True)
-    environment = Column(String, default="production")
+    environment = Column(String, default="production")            # production | staging | dev
+    data_classification = Column(String, default="internal")      # public | internal | pii | financial | phi
+    compliance_scope = Column(JSON, default=list)                  # e.g. ["PCI-DSS", "HIPAA"]
+    exposure = Column(String, default="internal")                 # internet-facing | internal
     active = Column(Boolean, default=True)
     last_seen = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

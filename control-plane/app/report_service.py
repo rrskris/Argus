@@ -35,7 +35,16 @@ _remediation_style = ParagraphStyle(
 )
 
 
-def _remediation_line(finding: dict) -> str:
+# Generic patch-management control reference per compliance framework — a
+# starting point, not a full compliance-mapping engine (that's future scope).
+_COMPLIANCE_CONTROL_NOTES = {
+    "PCI-DSS": "PCI-DSS Req 6.2 — apply security patches for known vulnerabilities.",
+    "HIPAA": "HIPAA Security Rule 164.308(a)(5) — protect against known vulnerabilities.",
+    "SOC2": "SOC 2 CC7.1 — identify and remediate vulnerabilities in a timely manner.",
+}
+
+
+def _action_line(finding: dict) -> str:
     fixed_in = finding.get("fixed_in")
     fixed_version = fixed_in[0] if isinstance(fixed_in, list) and fixed_in else fixed_in
     affected = finding.get("affected") or []
@@ -43,6 +52,61 @@ def _remediation_line(finding: dict) -> str:
     if fixed_version:
         return f"Upgrade {component} to {fixed_version} or later."
     return f"No fixed version published yet for {component} — track this CVE for an update."
+
+
+def _build_remediation(finding: dict) -> dict:
+    """
+    Turn a finding's score_factors into the explainable "why + what to do"
+    output that's the actual differentiator — not just an upgrade command.
+    """
+    factors = finding.get("score_factors") or {}
+    action = _action_line(finding)
+
+    # Only cite factors that actually raised the score above baseline (weight > 1.0)
+    reasons = []
+    env = factors.get("environment", {})
+    if env.get("weight", 1.0) > 1.0:
+        reasons.append(f"this is a {env.get('value')} environment")
+    data_class = factors.get("data_classification", {})
+    if data_class.get("weight", 1.0) > 1.0:
+        reasons.append(f"it handles {data_class.get('value')} data")
+    exposure = factors.get("exposure", {})
+    if exposure.get("weight", 1.0) > 1.0:
+        reasons.append(f"it's {exposure.get('value')}")
+    compliance_scope = factors.get("compliance_scope", {}).get("value") or []
+    if compliance_scope:
+        reasons.append(f"it's in scope for {', '.join(compliance_scope)}")
+
+    score = finding.get("contextual_score")
+    if reasons:
+        why_it_matters = (
+            f"Ranked {score} because {', and '.join(reasons)} — "
+            "higher than raw CVSS alone would suggest."
+        )
+    else:
+        why_it_matters = (
+            f"Ranked {score}, using baseline severity only — no elevated risk "
+            "context (environment, data classification, exposure) is set for this cluster. "
+            "Configure it under Settings for sharper prioritization."
+        )
+
+    compliance_note = None
+    if compliance_scope:
+        notes = [_COMPLIANCE_CONTROL_NOTES.get(fw) for fw in compliance_scope]
+        compliance_note = " ".join(n for n in notes if n) or None
+
+    audit_note = (
+        f"Document remediation of {finding.get('cve_id', 'this CVE')} as evidence "
+        f"for {', '.join(compliance_scope)} audit scope." if compliance_scope
+        else f"Document remediation of {finding.get('cve_id', 'this CVE')} in your change log."
+    )
+
+    return {
+        "action": action,
+        "why_it_matters": why_it_matters,
+        "compliance_note": compliance_note,
+        "audit_note": audit_note,
+    }
 
 
 def build_cve_scan_pdf(scan: dict) -> bytes:
@@ -95,7 +159,12 @@ def build_cve_scan_pdf(scan: dict) -> bytes:
             )
             cvss = f.get("cvss_score")
             cvss_str = f" &mdash; CVSS {cvss}" if cvss is not None else ""
-            story.append(Paragraph(f"[{severity}] {f.get('cve_id', 'UNKNOWN')}{cvss_str}", header_style))
+            score_str = ""
+            if f.get("contextual_score") is not None:
+                score_str = f" &mdash; Contextual Risk Score {f['contextual_score']}"
+            story.append(Paragraph(
+                f"[{severity}] {f.get('cve_id', 'UNKNOWN')}{cvss_str}{score_str}", header_style
+            ))
             story.append(Paragraph(f.get("title", ""), _body_style))
             if f.get("description"):
                 story.append(Paragraph(f["description"], _body_style))
@@ -107,7 +176,12 @@ def build_cve_scan_pdf(scan: dict) -> bytes:
                 )
                 story.append(Paragraph(f"<b>Affected:</b> {affected_str}", _body_style))
 
-            story.append(Paragraph(f"<b>What to do:</b> {_remediation_line(f)}", _remediation_style))
+            remediation = _build_remediation(f)
+            story.append(Paragraph(f"<b>What to do:</b> {remediation['action']}", _remediation_style))
+            story.append(Paragraph(f"<b>Why it matters:</b> {remediation['why_it_matters']}", _body_style))
+            if remediation["compliance_note"]:
+                story.append(Paragraph(f"<b>Compliance:</b> {remediation['compliance_note']}", _body_style))
+            story.append(Paragraph(f"<b>Audit note:</b> {remediation['audit_note']}", _body_style))
 
             refs = f.get("references") or []
             if refs:

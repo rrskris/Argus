@@ -42,3 +42,22 @@ def test_login_and_self_scan():
         resp = client.get("/cve/summary", headers=headers)
         assert resp.status_code == 200
         assert "total_cves" in resp.json()
+
+        # Risk context: defaults on first access, then updatable
+        resp = client.get("/cve/context", headers=headers)
+        assert resp.status_code == 200, resp.text
+        context = resp.json()
+        assert context["environment"] == "production"
+
+        resp = client.put(
+            "/cve/context", headers=headers,
+            json={"environment": "dev", "data_classification": "pii", "compliance_scope": ["PCI-DSS"]},
+        )
+        assert resp.status_code == 200, resp.text
+        updated = resp.json()
+        assert updated["environment"] == "dev"
+        assert updated["data_classification"] == "pii"
+        assert updated["compliance_scope"] == ["PCI-DSS"]
+
+        resp = client.put("/cve/context", headers=headers, json={"environment": "not-a-real-env"})
+        assert resp.status_code == 400

@@ -24,8 +24,16 @@ interface AffectedMatch {
     component: string; version: string; fixed: string | null;
 }
 
+interface ScoreFactor {
+    value: unknown;
+    weight: number;
+    cvss_score?: number | null;
+}
+
 interface K8sFinding {
     cve_id: string; title: string; severity: string; cvss_score: number | null;
+    contextual_score?: number;
+    score_factors?: Record<string, ScoreFactor>;
     affected: AffectedMatch[];
     fixed_in: string[] | null; description: string;
     references: { url: string; type: string }[];
@@ -499,6 +507,14 @@ export default function CVEPage() {
                                                         <span className="font-mono text-neon-blue text-sm whitespace-nowrap">{f.cve_id}</span>
                                                         <SeverityBadge sev={f.severity} />
                                                         <span className="font-mono text-gray-300 text-xs">{f.cvss_score?.toFixed(1) ?? "—"}</span>
+                                                        {f.contextual_score !== undefined && (
+                                                            <span
+                                                                className="font-mono text-[11px] px-1.5 py-0.5 bg-neon-blue/10 border border-neon-blue/30 text-neon-blue rounded whitespace-nowrap"
+                                                                title="Contextual Risk Score — severity weighted by environment, data classification, compliance scope, and exposure"
+                                                            >
+                                                                risk {f.contextual_score.toFixed(1)}
+                                                            </span>
+                                                        )}
                                                         <span className="text-gray-300 text-xs flex-1 truncate">{f.title}</span>
                                                         {/* Affected component chips */}
                                                         <div className="flex gap-1 flex-shrink-0">
@@ -518,6 +534,27 @@ export default function CVEPage() {
                                                     {expandedFinding === f.cve_id && (
                                                         <div className="border-t border-gray-800 bg-gray-950/60 px-4 py-4 space-y-3 text-xs font-mono">
                                                             <p className="text-gray-300 leading-relaxed">{f.description}</p>
+                                                            {f.score_factors && (
+                                                                <div>
+                                                                    <span className="text-gray-600 uppercase tracking-widest block mb-1">Why it&apos;s ranked here</span>
+                                                                    <div className="flex flex-wrap gap-1.5">
+                                                                        {Object.entries(f.score_factors)
+                                                                            .filter(([, factor]) => factor.weight > 1.0)
+                                                                            .map(([key, factor]) => (
+                                                                                <span key={key}
+                                                                                    className="px-1.5 py-0.5 bg-neon-blue/10 border border-neon-blue/30 text-neon-blue text-[10px] rounded"
+                                                                                >
+                                                                                    {key.replace(/_/g, " ")}: {String(factor.value)} (&times;{factor.weight})
+                                                                                </span>
+                                                                            ))}
+                                                                        {Object.values(f.score_factors).every((factor) => factor.weight <= 1.0) && (
+                                                                            <span className="text-gray-600">
+                                                                                No elevated risk factors set — configure environment/data classification/exposure in Settings.
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                             <div className="flex flex-wrap gap-4 text-gray-500">
                                                                 {f.fixed_in && f.fixed_in.length > 0 && (
                                                                     <div>
