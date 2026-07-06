@@ -1,13 +1,14 @@
 """
-CVE scan PDF report generator.
+Scan PDF report generators (CVE + RBAC).
 
-Takes the finding structure already produced by cve_service (get_latest_scan /
-scan_cluster — scanned_at, cluster_version, severity_breakdown, findings[]) and
-renders a downloadable PDF for sharing with a team or attaching to a ticket.
+Takes the finding structures already produced by cve_service / rbac_service
+and renders a downloadable PDF for sharing with a team or attaching to a
+ticket. Remediation objects are built by remediation.py and attached to
+findings at scan time; older persisted scans without one get it built here
+on the fly.
 """
 
 import io
-from typing import Optional
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -16,6 +17,8 @@ from reportlab.lib.units import inch
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
 )
+
+from .remediation import build_remediation
 
 SEVERITY_COLOR = {
     "CRITICAL": colors.HexColor("#7f1d1d"),
@@ -35,78 +38,48 @@ _remediation_style = ParagraphStyle(
 )
 
 
-# Generic patch-management control reference per compliance framework — a
-# starting point, not a full compliance-mapping engine (that's future scope).
-_COMPLIANCE_CONTROL_NOTES = {
-    "PCI-DSS": "PCI-DSS Req 6.2 — apply security patches for known vulnerabilities.",
-    "HIPAA": "HIPAA Security Rule 164.308(a)(5) — protect against known vulnerabilities.",
-    "SOC2": "SOC 2 CC7.1 — identify and remediate vulnerabilities in a timely manner.",
-}
+def _severity_table(breakdown: dict) -> Table:
+    sev_rows = [["Severity", "Count"]] + [
+        [sev, str(breakdown.get(sev, 0))] for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+    ]
+    sev_table = Table(sev_rows, colWidths=[2 * inch, 1 * inch])
+    sev_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return sev_table
 
 
-def _action_line(finding: dict) -> str:
-    fixed_in = finding.get("fixed_in")
-    fixed_version = fixed_in[0] if isinstance(fixed_in, list) and fixed_in else fixed_in
-    affected = finding.get("affected") or []
-    component = affected[0].get("component") if affected else "the affected component"
-    if fixed_version:
-        return f"Upgrade {component} to {fixed_version} or later."
-    return f"No fixed version published yet for {component} — track this CVE for an update."
-
-
-def _build_remediation(finding: dict) -> dict:
-    """
-    Turn a finding's score_factors into the explainable "why + what to do"
-    output that's the actual differentiator — not just an upgrade command.
-    """
-    factors = finding.get("score_factors") or {}
-    action = _action_line(finding)
-
-    # Only cite factors that actually raised the score above baseline (weight > 1.0)
-    reasons = []
-    env = factors.get("environment", {})
-    if env.get("weight", 1.0) > 1.0:
-        reasons.append(f"this is a {env.get('value')} environment")
-    data_class = factors.get("data_classification", {})
-    if data_class.get("weight", 1.0) > 1.0:
-        reasons.append(f"it handles {data_class.get('value')} data")
-    exposure = factors.get("exposure", {})
-    if exposure.get("weight", 1.0) > 1.0:
-        reasons.append(f"it's {exposure.get('value')}")
-    compliance_scope = factors.get("compliance_scope", {}).get("value") or []
-    if compliance_scope:
-        reasons.append(f"it's in scope for {', '.join(compliance_scope)}")
-
-    score = finding.get("contextual_score")
-    if reasons:
-        why_it_matters = (
-            f"Ranked {score} because {', and '.join(reasons)} — "
-            "higher than raw CVSS alone would suggest."
-        )
-    else:
-        why_it_matters = (
-            f"Ranked {score}, using baseline severity only — no elevated risk "
-            "context (environment, data classification, exposure) is set for this cluster. "
-            "Configure it under Settings for sharper prioritization."
-        )
-
-    compliance_note = None
-    if compliance_scope:
-        notes = [_COMPLIANCE_CONTROL_NOTES.get(fw) for fw in compliance_scope]
-        compliance_note = " ".join(n for n in notes if n) or None
-
-    audit_note = (
-        f"Document remediation of {finding.get('cve_id', 'this CVE')} as evidence "
-        f"for {', '.join(compliance_scope)} audit scope." if compliance_scope
-        else f"Document remediation of {finding.get('cve_id', 'this CVE')} in your change log."
+def _finding_header_style(severity: str) -> ParagraphStyle:
+    return ParagraphStyle(
+        f"sev_{severity}", parent=_h2_style,
+        textColor=SEVERITY_COLOR.get(severity, colors.black),
     )
 
-    return {
-        "action": action,
-        "why_it_matters": why_it_matters,
-        "compliance_note": compliance_note,
-        "audit_note": audit_note,
-    }
+
+def _benchmark_refs_line(remediation: dict) -> str:
+    refs = remediation.get("benchmark_refs") or []
+    parts = []
+    for ref in refs:
+        ref_id = f" {ref['id']}" if ref.get("id") else ""
+        parts.append(f"{ref.get('benchmark', '')}{ref_id} — {ref.get('title', '')}")
+    return "; ".join(parts)
+
+
+def _append_remediation(story: list, finding: dict) -> None:
+    remediation = finding.get("remediation") or build_remediation(finding)
+    story.append(Paragraph(f"<b>What to do:</b> {remediation['action']}", _remediation_style))
+    story.append(Paragraph(f"<b>Why it matters:</b> {remediation['why_it_matters']}", _body_style))
+    refs_line = _benchmark_refs_line(remediation)
+    if refs_line:
+        story.append(Paragraph(f"<b>Benchmark:</b> {refs_line}", _body_style))
+    if remediation.get("compliance_note"):
+        story.append(Paragraph(f"<b>Compliance:</b> {remediation['compliance_note']}", _body_style))
+    story.append(Paragraph(f"<b>Audit note:</b> {remediation['audit_note']}", _body_style))
 
 
 def build_cve_scan_pdf(scan: dict) -> bytes:
@@ -128,21 +101,7 @@ def build_cve_scan_pdf(scan: dict) -> bytes:
         f"Affected: {scan.get('affected_count', 0)}", _body_style
     ))
     story.append(Spacer(1, 10))
-
-    breakdown = scan.get("severity_breakdown") or {}
-    sev_rows = [["Severity", "Count"]] + [
-        [sev, str(breakdown.get(sev, 0))] for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
-    ]
-    sev_table = Table(sev_rows, colWidths=[2 * inch, 1 * inch])
-    sev_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    story.append(sev_table)
+    story.append(_severity_table(scan.get("severity_breakdown") or {}))
     story.append(Spacer(1, 16))
 
     # ── Findings ───────────────────────────────────────────────────────────────
@@ -153,17 +112,14 @@ def build_cve_scan_pdf(scan: dict) -> bytes:
         story.append(Paragraph("Findings", _styles["Heading1"]))
         for f in findings:
             severity = f.get("severity", "UNKNOWN")
-            header_style = ParagraphStyle(
-                f"sev_{severity}", parent=_h2_style,
-                textColor=SEVERITY_COLOR.get(severity, colors.black),
-            )
             cvss = f.get("cvss_score")
             cvss_str = f" &mdash; CVSS {cvss}" if cvss is not None else ""
             score_str = ""
             if f.get("contextual_score") is not None:
                 score_str = f" &mdash; Contextual Risk Score {f['contextual_score']}"
             story.append(Paragraph(
-                f"[{severity}] {f.get('cve_id', 'UNKNOWN')}{cvss_str}{score_str}", header_style
+                f"[{severity}] {f.get('cve_id', 'UNKNOWN')}{cvss_str}{score_str}",
+                _finding_header_style(severity),
             ))
             story.append(Paragraph(f.get("title", ""), _body_style))
             if f.get("description"):
@@ -176,12 +132,7 @@ def build_cve_scan_pdf(scan: dict) -> bytes:
                 )
                 story.append(Paragraph(f"<b>Affected:</b> {affected_str}", _body_style))
 
-            remediation = _build_remediation(f)
-            story.append(Paragraph(f"<b>What to do:</b> {remediation['action']}", _remediation_style))
-            story.append(Paragraph(f"<b>Why it matters:</b> {remediation['why_it_matters']}", _body_style))
-            if remediation["compliance_note"]:
-                story.append(Paragraph(f"<b>Compliance:</b> {remediation['compliance_note']}", _body_style))
-            story.append(Paragraph(f"<b>Audit note:</b> {remediation['audit_note']}", _body_style))
+            _append_remediation(story, f)
 
             refs = f.get("references") or []
             if refs:
@@ -189,6 +140,63 @@ def build_cve_scan_pdf(scan: dict) -> bytes:
                 if ref_str:
                     story.append(Paragraph(f"<b>References:</b> {ref_str}", _body_style))
 
+            story.append(Spacer(1, 8))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def build_rbac_scan_pdf(scan: dict) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=letter,
+        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        leftMargin=0.6 * inch, rightMargin=0.6 * inch,
+    )
+    story = []
+
+    # ── Cover ──────────────────────────────────────────────────────────────────
+    story.append(Paragraph("Argus RBAC Scan Report", _title_style))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(f"Scanned at: {scan.get('scanned_at', 'unknown')}", _body_style))
+    story.append(Paragraph(
+        f"Bindings checked: {scan.get('total_bindings_checked', 0)} &mdash; "
+        f"Findings: {scan.get('affected_count', 0)}", _body_style
+    ))
+    story.append(Spacer(1, 10))
+    story.append(_severity_table(scan.get("severity_breakdown") or {}))
+    story.append(Spacer(1, 16))
+
+    # ── Findings ───────────────────────────────────────────────────────────────
+    findings = scan.get("findings") or []
+    if not findings:
+        story.append(Paragraph("No RBAC misconfigurations found in this scan.", _body_style))
+    else:
+        story.append(Paragraph("Findings", _styles["Heading1"]))
+        for f in findings:
+            severity = f.get("severity", "UNKNOWN")
+            score_str = ""
+            if f.get("contextual_score") is not None:
+                score_str = f" &mdash; Contextual Risk Score {f['contextual_score']}"
+            story.append(Paragraph(
+                f"[{severity}] {f.get('title', 'RBAC finding')}{score_str}",
+                _finding_header_style(severity),
+            ))
+            if f.get("description"):
+                story.append(Paragraph(f["description"], _body_style))
+
+            binding = f.get("binding") or {}
+            binding_str = f"{binding.get('kind', '?')} '{binding.get('name', '?')}'"
+            if binding.get("namespace"):
+                binding_str += f" (namespace: {binding['namespace']})"
+            subjects = f.get("subjects") or []
+            subjects_str = ", ".join(
+                f"{s.get('kind')}:{s.get('name')}" for s in subjects
+            ) or "none"
+            story.append(Paragraph(f"<b>Binding:</b> {binding_str}", _body_style))
+            story.append(Paragraph(f"<b>Subjects:</b> {subjects_str}", _body_style))
+
+            _append_remediation(story, f)
             story.append(Spacer(1, 8))
 
     doc.build(story)

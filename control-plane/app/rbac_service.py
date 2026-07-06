@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from .models import RBACScanResult
+from .remediation import build_remediation
 from .scoring import compute_contextual_score
 
 logger = logging.getLogger(__name__)
@@ -21,10 +22,19 @@ logger = logging.getLogger(__name__)
 _EMPTY_GRAPH = {"roles": [], "cluster_roles": [], "role_bindings": [], "cluster_role_bindings": []}
 
 # Identities broad enough that granting them anything risky matters cluster-wide.
+# system:masters is here (not in the builtin allowlist) because membership
+# bypasses RBAC entirely — any binding to it besides the stock cluster-admin
+# one is a misconfiguration, not control-plane plumbing (CIS 5.1.7).
 _BROAD_SERVICE_ACCOUNTS = {"default"}
-_BROAD_GROUPS = {"system:authenticated", "system:unauthenticated"}
+_BROAD_GROUPS = {"system:authenticated", "system:unauthenticated", "system:masters"}
 
 _EXEC_RESOURCES = {"pods/exec", "pods/attach", "pods/portforward"}
+_ESCALATION_VERBS = {"escalate", "bind", "impersonate"}
+_WRITE_VERBS = {"create", "update", "patch", "delete"}
+_WORKLOAD_RESOURCES = {
+    "pods", "deployments", "daemonsets", "statefulsets", "replicasets", "jobs", "cronjobs",
+}
+_WEBHOOK_RESOURCES = {"mutatingwebhookconfigurations", "validatingwebhookconfigurations"}
 
 # Kubernetes-managed built-ins (core control-plane roles/identities like
 # system:kube-controller-manager, system:node, kubeadm:cluster-admins). These
@@ -54,6 +64,27 @@ def _all_subjects_builtin(subjects: list) -> bool:
     return bool(subjects) and all(_is_builtin_subject(s) for s in subjects)
 
 
+def _is_stock_cluster_admin_binding(binding: dict) -> bool:
+    """
+    The stock `cluster-admin` ClusterRoleBinding (cluster-admin role →
+    system:masters group) ships with every cluster and is the one legitimate
+    system:masters binding. Any *other* binding to system:masters is flagged
+    (CIS 5.1.7), which is why the group lives in _BROAD_GROUPS, not the
+    builtin allowlist.
+    """
+    subjects = binding.get("subjects", [])
+    return (
+        binding.get("binding_kind") == "ClusterRoleBinding"
+        and binding.get("name") == "cluster-admin"
+        and (binding.get("roleRef") or {}).get("name") == "cluster-admin"
+        and bool(subjects)
+        and all(
+            s.get("kind") == "Group" and s.get("name") == "system:masters"
+            for s in subjects
+        )
+    )
+
+
 def _is_wildcard_open(rule: dict) -> bool:
     return "*" in (rule.get("verbs") or []) or "*" in (rule.get("resources") or [])
 
@@ -68,6 +99,49 @@ def _grants_exec_attach(rule: dict) -> bool:
     resources = rule.get("resources") or []
     verbs = rule.get("verbs") or []
     return bool(_EXEC_RESOURCES & set(resources)) and any(v in verbs for v in ("create", "get"))
+
+
+def _grants_escalation_verbs(rule: dict) -> bool:
+    return bool(_ESCALATION_VERBS & set(rule.get("verbs") or []))
+
+
+def _grants_node_proxy(rule: dict) -> bool:
+    return "nodes/proxy" in (rule.get("resources") or [])
+
+
+def _grants_token_creation(rule: dict) -> bool:
+    return (
+        "serviceaccounts/token" in (rule.get("resources") or [])
+        and "create" in (rule.get("verbs") or [])
+    )
+
+
+def _grants_csr_approval(rule: dict) -> bool:
+    return (
+        "certificatesigningrequests/approval" in (rule.get("resources") or [])
+        and bool({"update", "patch"} & set(rule.get("verbs") or []))
+    )
+
+
+def _grants_webhook_write(rule: dict) -> bool:
+    return (
+        bool(_WEBHOOK_RESOURCES & set(rule.get("resources") or []))
+        and bool(_WRITE_VERBS & set(rule.get("verbs") or []))
+    )
+
+
+def _grants_workload_creation(rule: dict) -> bool:
+    return (
+        bool(_WORKLOAD_RESOURCES & set(rule.get("resources") or []))
+        and "create" in (rule.get("verbs") or [])
+    )
+
+
+def _grants_pv_creation(rule: dict) -> bool:
+    return (
+        "persistentvolumes" in (rule.get("resources") or [])
+        and "create" in (rule.get("verbs") or [])
+    )
 
 
 def _is_cluster_admin_equivalent(role_name: str, rules: list) -> bool:
@@ -103,6 +177,77 @@ def _evaluate_role_risks(rules: list, is_cluster_scoped: bool) -> list[dict]:
             "severity": "MEDIUM",
             "detail": "Can exec/attach/port-forward into pods — equivalent to code execution access.",
         })
+
+    if any(_grants_escalation_verbs(r) for r in rules):
+        risks.append({
+            "rule_type": "privilege_escalation_verbs",
+            "severity": "HIGH" if is_cluster_scoped else "MEDIUM",
+            "detail": (
+                "Grants escalate/bind/impersonate — each verb lets the holder "
+                "obtain permissions beyond what they were granted."
+            ),
+        })
+
+    if any(_grants_token_creation(r) for r in rules):
+        risks.append({
+            "rule_type": "token_creation",
+            "severity": "HIGH" if is_cluster_scoped else "MEDIUM",
+            "detail": "Can create ServiceAccount tokens (TokenRequest) — can act as any covered ServiceAccount.",
+        })
+
+    if any(_grants_workload_creation(r) for r in rules):
+        risks.append({
+            "rule_type": "workload_creation",
+            "severity": "MEDIUM",
+            "detail": (
+                "Can create workloads — implicitly reaches every Secret, ConfigMap, "
+                "and ServiceAccount mountable in the namespace."
+            ),
+        })
+
+    # These resources are cluster-scoped; a grant only means something in a
+    # ClusterRole. Namespaced Role grants on them are inert, so skip them to
+    # avoid flagging permissions that cannot actually be used.
+    if is_cluster_scoped:
+        if any(_grants_node_proxy(r) for r in rules):
+            risks.append({
+                "rule_type": "node_proxy_access",
+                "severity": "HIGH",
+                "detail": (
+                    "Can access the kubelet API via nodes/proxy — command execution on "
+                    "pods that bypasses API-server audit logging and admission control."
+                ),
+            })
+
+        if any(_grants_csr_approval(r) for r in rules):
+            risks.append({
+                "rule_type": "csr_approval",
+                "severity": "HIGH",
+                "detail": (
+                    "Can approve CertificateSigningRequests — can issue client "
+                    "certificates for arbitrary identities, including system components."
+                ),
+            })
+
+        if any(_grants_webhook_write(r) for r in rules):
+            risks.append({
+                "rule_type": "webhook_config_access",
+                "severity": "HIGH",
+                "detail": (
+                    "Can modify admission webhook configurations — can intercept or "
+                    "mutate every object admitted to the cluster, including secrets reads."
+                ),
+            })
+
+        if any(_grants_pv_creation(r) for r in rules):
+            risks.append({
+                "rule_type": "pv_creation",
+                "severity": "HIGH",
+                "detail": (
+                    "Can create PersistentVolumes — enables hostPath volumes that "
+                    "expose node filesystems to workloads."
+                ),
+            })
 
     return risks
 
@@ -148,7 +293,11 @@ def evaluate_rbac_findings(graph: dict, context: dict) -> list[dict]:
             continue
 
         subjects = binding.get("subjects", [])
-        if _is_builtin_role(role_name) or _all_subjects_builtin(subjects):
+        if (
+            _is_builtin_role(role_name)
+            or _all_subjects_builtin(subjects)
+            or _is_stock_cluster_admin_binding(binding)
+        ):
             continue
 
         rules = role.get("rules", [])
@@ -167,7 +316,7 @@ def evaluate_rbac_findings(graph: dict, context: dict) -> list[dict]:
         for risk in risks:
             # RBAC findings have no CVSS score — severity band alone drives the base value.
             contextual_score, score_factors = compute_contextual_score(None, risk["severity"], context)
-            findings.append({
+            finding = {
                 "rule_type": risk["rule_type"],
                 "severity": risk["severity"],
                 "title": f"{risk['rule_type'].replace('_', ' ').title()} via {role_kind} '{role_name}'",
@@ -179,7 +328,9 @@ def evaluate_rbac_findings(graph: dict, context: dict) -> list[dict]:
                 "subjects": subjects,
                 "contextual_score": contextual_score,
                 "score_factors": score_factors,
-            })
+            }
+            finding["remediation"] = build_remediation(finding)
+            findings.append(finding)
 
     findings.sort(key=lambda f: -f["contextual_score"])
     return findings

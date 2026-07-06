@@ -202,6 +202,145 @@ def test_cluster_admin_bound_to_all_authenticated_users_is_still_critical():
     assert critical[0]["severity"] == "CRITICAL"
 
 
+def _single_rule_graph(role_name, rule, subject=None):
+    """One ClusterRole with one rule, bound to one ordinary ServiceAccount."""
+    subject = subject or {"kind": "ServiceAccount", "name": "app", "namespace": "team-a"}
+    return {
+        "roles": [], "role_bindings": [],
+        "cluster_roles": [_cluster_role(role_name, [rule])],
+        "cluster_role_bindings": [_cluster_role_binding(f"{role_name}-binding", role_name, [subject])],
+    }
+
+
+def test_escalation_verbs_flagged():
+    graph = _single_rule_graph("escalator", {
+        "verbs": ["escalate", "bind"], "resources": ["clusterroles"],
+        "api_groups": ["rbac.authorization.k8s.io"], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    flagged = [f for f in findings if f["rule_type"] == "privilege_escalation_verbs"]
+    assert len(flagged) == 1
+    assert flagged[0]["severity"] == "HIGH"
+
+
+def test_node_proxy_access_flagged():
+    graph = _single_rule_graph("node-proxier", {
+        "verbs": ["get", "create"], "resources": ["nodes/proxy"],
+        "api_groups": [""], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert any(f["rule_type"] == "node_proxy_access" for f in findings)
+
+
+def test_token_creation_flagged():
+    graph = _single_rule_graph("token-minter", {
+        "verbs": ["create"], "resources": ["serviceaccounts/token"],
+        "api_groups": [""], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert any(f["rule_type"] == "token_creation" for f in findings)
+
+
+def test_csr_approval_flagged():
+    graph = _single_rule_graph("csr-approver", {
+        "verbs": ["update"], "resources": ["certificatesigningrequests/approval"],
+        "api_groups": ["certificates.k8s.io"], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert any(f["rule_type"] == "csr_approval" for f in findings)
+
+
+def test_webhook_config_write_flagged():
+    graph = _single_rule_graph("webhook-writer", {
+        "verbs": ["create", "update"], "resources": ["mutatingwebhookconfigurations"],
+        "api_groups": ["admissionregistration.k8s.io"], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert any(f["rule_type"] == "webhook_config_access" for f in findings)
+
+
+def test_workload_creation_flagged_as_medium():
+    graph = _single_rule_graph("deployer", {
+        "verbs": ["create"], "resources": ["deployments"],
+        "api_groups": ["apps"], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    flagged = [f for f in findings if f["rule_type"] == "workload_creation"]
+    assert len(flagged) == 1
+    assert flagged[0]["severity"] == "MEDIUM"
+
+
+def test_pv_creation_flagged():
+    graph = _single_rule_graph("pv-creator", {
+        "verbs": ["create"], "resources": ["persistentvolumes"],
+        "api_groups": [""], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert any(f["rule_type"] == "pv_creation" for f in findings)
+
+
+def test_readonly_narrow_role_produces_no_findings():
+    graph = _single_rule_graph("viewer", {
+        "verbs": ["get", "list", "watch"], "resources": ["configmaps", "services"],
+        "api_groups": [""], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert findings == []
+
+
+def test_user_created_binding_to_system_masters_is_flagged():
+    """CIS 5.1.7: system:masters bypasses RBAC entirely. Only the stock
+    `cluster-admin` ClusterRoleBinding is legitimate — any other binding to
+    the group must NOT be suppressed by the builtin allowlist."""
+    graph = {
+        "roles": [], "role_bindings": [],
+        "cluster_roles": [_cluster_role("cluster-admin", [
+            {"verbs": ["*"], "resources": ["*"], "api_groups": ["*"], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [_cluster_role_binding(
+            "sneaky-masters", "cluster-admin",
+            [{"kind": "Group", "name": "system:masters", "namespace": None}],
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    critical = [f for f in findings if f["rule_type"] == "cluster_admin_binding"]
+    assert len(critical) == 1
+    assert critical[0]["severity"] == "CRITICAL"
+
+
+def test_findings_carry_remediation():
+    graph = _single_rule_graph("secret-reader", {
+        "verbs": ["get", "list"], "resources": ["secrets"],
+        "api_groups": [""], "resource_names": [],
+    })
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert findings
+    remediation = findings[0]["remediation"]
+    assert remediation["action"]
+    assert remediation["why_it_matters"]
+    assert any(ref.get("id") == "5.1.2" for ref in remediation["benchmark_refs"])
+
+
 def test_no_matching_role_for_binding_is_skipped_without_error():
     graph = {
         "roles": [], "role_bindings": [], "cluster_roles": [],

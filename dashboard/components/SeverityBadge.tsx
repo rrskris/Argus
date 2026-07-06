@@ -1,4 +1,4 @@
-const SEV_STYLE: Record<string, string> = {
+export const SEV_STYLE: Record<string, string> = {
     CRITICAL: "bg-red-900/50 text-red-400 border border-red-700/50",
     HIGH:     "bg-orange-900/40 text-orange-400 border border-orange-700/50",
     MEDIUM:   "bg-yellow-900/40 text-yellow-400 border border-yellow-700/50",

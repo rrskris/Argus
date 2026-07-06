@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from .models import CVEFeed, CVEEntry, CVEScanResult, K8sCVEScanResult, ClusterRegistration, ScanContext
 from .addon_detection import ADDON_IMAGE_PATTERNS, image_version as _image_version
+from .remediation import build_remediation
 from .scoring import compute_contextual_score
 
 logger = logging.getLogger(__name__)
@@ -547,7 +548,7 @@ def _match_cves(
             contextual_score, score_factors = compute_contextual_score(
                 entry.cvss_score, entry.severity, context or {}
             )
-            findings.append({
+            finding = {
                 "cve_id": entry.cve_id,
                 "title": entry.title,
                 "severity": entry.severity,
@@ -559,7 +560,9 @@ def _match_cves(
                 "description": (entry.description or "")[:500],
                 "references": (entry.references or [])[:3],
                 "published_date": entry.published_date.isoformat() if entry.published_date else None,
-            })
+            }
+            finding["remediation"] = build_remediation(finding)
+            findings.append(finding)
 
     findings.sort(key=lambda x: -x["contextual_score"])
     return findings

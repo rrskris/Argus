@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../../components/AuthContext";
 import SeverityBadge from "../../components/SeverityBadge";
+import RemediationPanel, { Remediation } from "../../components/RemediationPanel";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -27,6 +28,7 @@ interface RBACFinding {
     subjects: Subject[];
     contextual_score: number;
     score_factors: Record<string, ScoreFactor>;
+    remediation?: Remediation;
 }
 
 interface RBACScan {
@@ -78,6 +80,21 @@ export default function RBACPage() {
         setScanning(false);
     };
 
+    const downloadReport = async () => {
+        const res = await fetch(`${API}/rbac/scan/latest/report.pdf`, { headers });
+        if (!res.ok) {
+            alert("No scan results yet — run a scan first.");
+            return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "argus-rbac-report.pdf";
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
     if (loading) {
         return <div className="p-8 text-center text-gray-500 font-mono animate-pulse py-32">Loading RBAC data...</div>;
     }
@@ -91,13 +108,22 @@ export default function RBACPage() {
                         Kubernetes Role/ClusterRole misconfigurations, ranked by the same Contextual Risk Score CVE findings use.
                     </p>
                 </div>
-                <button
-                    onClick={runScan}
-                    disabled={scanning}
-                    className="px-4 py-2 bg-neon-blue/10 border border-neon-blue text-neon-blue rounded font-mono text-sm hover:bg-neon-blue/20 transition-colors disabled:opacity-50"
-                >
-                    {scanning ? "Scanning..." : "Run scan"}
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={downloadReport}
+                        title="Download the latest scan as a PDF report"
+                        className="px-4 py-2 bg-gray-800/60 border border-gray-700 text-gray-300 rounded font-mono text-sm hover:bg-gray-800 transition-colors"
+                    >
+                        ⬇ Download Report
+                    </button>
+                    <button
+                        onClick={runScan}
+                        disabled={scanning}
+                        className="px-4 py-2 bg-neon-blue/10 border border-neon-blue text-neon-blue rounded font-mono text-sm hover:bg-neon-blue/20 transition-colors disabled:opacity-50"
+                    >
+                        {scanning ? "Scanning..." : "Run scan"}
+                    </button>
+                </div>
             </div>
 
             {scan && !scan.message && (
@@ -179,6 +205,8 @@ export default function RBACPage() {
                                                     )}
                                                 </div>
                                             </div>
+
+                                            {f.remediation && <RemediationPanel remediation={f.remediation} />}
                                         </div>
                                     )}
                                 </div>

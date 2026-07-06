@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "../../components/AuthContext";
-import SeverityBadge from "../../components/SeverityBadge";
+import SeverityBadge, { SEV_STYLE } from "../../components/SeverityBadge";
+import RemediationPanel, { Remediation } from "../../components/RemediationPanel";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -27,6 +28,7 @@ interface K8sFinding {
     cve_id: string; title: string; severity: string; cvss_score: number | null;
     contextual_score?: number;
     score_factors?: Record<string, ScoreFactor>;
+    remediation?: Remediation;
     affected: AffectedMatch[];
     fixed_in: string[] | null; description: string;
     references: { url: string; type: string }[];
@@ -540,6 +542,7 @@ export default function CVEPage() {
                                                                     </div>
                                                                 </div>
                                                             )}
+                                                            {f.remediation && <RemediationPanel remediation={f.remediation} />}
                                                             <div className="flex flex-wrap gap-4 text-gray-500">
                                                                 {f.fixed_in && f.fixed_in.length > 0 && (
                                                                     <div>
