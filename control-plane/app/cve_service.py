@@ -26,6 +26,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from .models import CVEFeed, CVEEntry, CVEScanResult, K8sCVEScanResult, ClusterRegistration
+from .addon_detection import ADDON_IMAGE_PATTERNS, image_version as _image_version
 
 logger = logging.getLogger(__name__)
 
@@ -374,24 +375,6 @@ def _detect_and_parse(data: dict, feed_id: UUID) -> list:
 
 # ── Remote K8s cluster client ──────────────────────────────────────────────────
 
-# Map from CVE `affected_components[].component` name to image substrings
-# that indicate the add-on is running in the cluster.
-ADDON_IMAGE_PATTERNS: dict[str, re.Pattern] = {
-    "ingress-nginx":   re.compile(r"ingress-nginx/controller", re.IGNORECASE),
-    "csi-driver-nfs":  re.compile(r"nfsplugin|nfs-csi|csi-driver-nfs", re.IGNORECASE),
-    "csi-driver-smb":  re.compile(r"smbplugin|smb-csi|csi-driver-smb", re.IGNORECASE),
-    "metrics-server":  re.compile(r"metrics-server", re.IGNORECASE),
-    "coredns":         re.compile(r"coredns", re.IGNORECASE),
-}
-
-# Extract image version tag (handles v1.2.3 and 1.2.3 forms)
-_IMAGE_VERSION_RE = re.compile(r":v?([\d]+\.[\d]+\.[\d]+)", )
-
-
-def _image_version(image: str) -> Optional[str]:
-    m = _IMAGE_VERSION_RE.search(image)
-    return m.group(1) if m else None
-
 
 class RemoteK8sClient:
     """
@@ -656,13 +639,15 @@ class CVEFeedService:
 
     # ── In-cluster scan (legacy — uses in-cluster kubeconfig) ─────────────────
 
-    def _collect_cluster_versions(self) -> tuple:
+    def _collect_cluster_inventory(self) -> tuple:
+        """Returns (server_version, node_versions_set, addons_list) for the in-cluster scan."""
         server_version = "unknown"
         all_versions: set = set()
+        addons: list = []
         try:
             from .k8s_client import K8sClient
             k8s = K8sClient()
-            info = k8s.v1.get_code()
+            info = k8s.version_api.get_code()
             major = re.sub(r"\D", "", info.major or "0")
             minor = re.sub(r"\D", "", info.minor or "0")
             git_ver = (info.git_version or "").lstrip("v").split("-")[0]
@@ -674,24 +659,26 @@ class CVEFeedService:
                     kv = node.get("version", "").lstrip("v").split("-")[0]
                     if kv:
                         all_versions.add(kv)
+            addons = k8s.detect_addons()
         except Exception as e:
-            logger.warning(f"Could not query in-cluster version: {e}")
-        return server_version, all_versions
+            logger.warning(f"Could not query in-cluster inventory: {e}")
+        return server_version, all_versions, addons
 
     def scan_cluster(self, db: Session) -> dict:
-        server_version, versions_to_check = self._collect_cluster_versions()
+        server_version, versions_to_check, addons = self._collect_cluster_inventory()
         entries = (
             db.query(CVEEntry)
             .join(CVEFeed)
             .filter(CVEFeed.enabled == True)
             .all()
         )
-        # Build simple addons list (empty for in-cluster — use registered scan for add-on detection)
-        findings = _match_cves(entries, server_version, sorted(versions_to_check - {server_version}), [])
+        node_versions = sorted(versions_to_check - {server_version})
+        findings = _match_cves(entries, server_version, node_versions, addons)
 
         result = CVEScanResult(
             cluster_version=server_version,
-            node_versions=sorted(versions_to_check - {server_version}),
+            node_versions=node_versions,
+            addons=addons,
             total_cves_checked=len(entries),
             affected_count=len(findings),
             findings=findings,
@@ -703,7 +690,8 @@ class CVEFeedService:
         return {
             "scanned_at": result.scanned_at.isoformat(),
             "cluster_version": server_version,
-            "node_versions": sorted(versions_to_check - {server_version}),
+            "node_versions": node_versions,
+            "addons": addons,
             "total_cves_checked": len(entries),
             "affected_count": len(findings),
             "severity_breakdown": _severity_breakdown(findings),
@@ -719,6 +707,7 @@ class CVEFeedService:
             "scanned_at": scan.scanned_at.isoformat(),
             "cluster_version": scan.cluster_version,
             "node_versions": scan.node_versions or [],
+            "addons": scan.addons or [],
             "total_cves_checked": scan.total_cves_checked,
             "affected_count": scan.affected_count,
             "severity_breakdown": _severity_breakdown(findings),

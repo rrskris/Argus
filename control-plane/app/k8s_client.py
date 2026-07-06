@@ -3,6 +3,8 @@ from kubernetes.client.rest import ApiException
 import os
 import logging
 
+from .addon_detection import match_addon
+
 logger = logging.getLogger(__name__)
 
 class K8sClient:
@@ -29,6 +31,7 @@ class K8sClient:
             self.rbac_v1 = client.RbacAuthorizationV1Api()
             self.apiextensions_v1 = client.ApiextensionsV1Api()
             self.custom_objects = client.CustomObjectsApi()
+            self.version_api = client.VersionApi()
 
     def get_nodes(self):
         if not self.authorized: return {"error": "K8s not configured"}
@@ -61,6 +64,54 @@ class K8sClient:
             return self.core_v1.read_namespaced_pod_log(pod_name, namespace, tail_lines=tail_lines)
         except ApiException as e:
             return f"Error reading logs: {e}"
+
+    def detect_addons(self) -> list:
+        """
+        Scan all Deployments and DaemonSets cluster-wide to detect running
+        add-ons and their versions by matching container images. Mirrors
+        RemoteK8sClient.detect_addons() in cve_service.py but uses the
+        in-cluster Kubernetes Python client instead of raw HTTP calls.
+
+        Returns a list of dicts: {name, version, namespace, workload, image}
+        """
+        if not self.authorized:
+            return []
+
+        addons: list = []
+        seen: set = set()  # (addon_name, version) dedup
+
+        try:
+            workloads = (
+                self.apps_v1.list_deployment_for_all_namespaces().items
+                + self.apps_v1.list_daemon_set_for_all_namespaces().items
+            )
+        except ApiException as e:
+            logger.warning(f"Failed to list deployments/daemonsets for addon detection: {e}")
+            return []
+
+        for item in workloads:
+            ns = item.metadata.namespace
+            workload_name = item.metadata.name
+            spec = item.spec.template.spec
+            containers = (spec.containers or []) + (spec.init_containers or [])
+
+            for container in containers:
+                image = container.image or ""
+                match = match_addon(image)
+                if not match:
+                    continue
+                addon_name, version = match
+                key = (addon_name, version)
+                if key not in seen:
+                    seen.add(key)
+                    addons.append({
+                        "name": addon_name,
+                        "version": version,
+                        "namespace": ns,
+                        "workload": workload_name,
+                        "image": image,
+                    })
+        return addons
 
     def get_crds(self):
         if not self.authorized: return {"error": "K8s not configured"}

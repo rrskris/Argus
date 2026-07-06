@@ -1,169 +1,117 @@
-'use client';
+"use client";
 
-import { useEffect, useState, useCallback } from 'react';
-import axios from 'axios';
-import { WidgetCanvas } from '@/components/widgets/WidgetCanvas';
-import { WIDGET_REGISTRY } from '@/components/widgets/WidgetRegistry';
-import type { Layout } from 'react-grid-layout';
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useAuth } from "../components/AuthContext";
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-interface WidgetInstance {
-  id: string;
-  widget_type: string;
-  title?: string;
-  grid_x: number;
-  grid_y: number;
-  grid_w: number;
-  grid_h: number;
-  config: Record<string, unknown>;
+interface LatestScan {
+    scanned_at: string;
+    cluster_version: string | null;
+    affected_count: number;
+    total_cves_checked: number;
+    severity_breakdown: Record<string, number>;
+    status?: string;
 }
 
-interface Dashboard {
-  id: string;
-  name: string;
-  is_default: boolean;
-  widgets: WidgetInstance[];
+interface Summary {
+    feeds: number;
+    total_cves: number;
+    severity_breakdown: Record<string, number>;
+    latest_scan: LatestScan | { message: string } | null;
 }
 
-function authHeaders() {
-  return { Authorization: `Bearer ${localStorage.getItem('token')}` };
+function StatCard({ label, value, sub, color }: { label: string; value: number | string; sub?: string; color: string }) {
+    return (
+        <div className={`bg-gray-900/80 border ${color} rounded p-4`}>
+            <div className="text-2xl font-bold font-mono text-white">{value}</div>
+            <div className="text-xs font-mono text-gray-400 uppercase tracking-widest mt-1">{label}</div>
+            {sub && <div className="text-[10px] text-gray-600 mt-0.5">{sub}</div>}
+        </div>
+    );
+}
+
+function SevBar({ breakdown }: { breakdown: Record<string, number> }) {
+    const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
+    const colors = { CRITICAL: "bg-red-500", HIGH: "bg-orange-500", MEDIUM: "bg-yellow-500", LOW: "bg-blue-400" };
+    return (
+        <div className="flex gap-3 flex-wrap">
+            {order.map((s) => (
+                <span key={s} className="flex items-center gap-1.5 text-xs font-mono">
+                    <span className={`w-2 h-2 rounded-full ${colors[s]}`} />
+                    <span className="text-gray-400">{s[0]}{s.slice(1).toLowerCase()}</span>
+                    <span className="text-white font-bold">{breakdown[s] ?? 0}</span>
+                </span>
+            ))}
+        </div>
+    );
 }
 
 export default function HomePage() {
-  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
-  const [dashboardList, setDashboardList] = useState<{ id: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+    const { token, user } = useAuth();
+    const [summary, setSummary] = useState<Summary | null>(null);
+    const [loading, setLoading] = useState(true);
 
-  // Load or create the default dashboard
-  useEffect(() => {
-    axios.get(`${API}/api/v1/dashboards`, { headers: authHeaders() })
-      .then(async (r) => {
-        const list = r.data as { id: string; name: string; is_default: boolean }[];
-        setDashboardList(list);
-        const def = list.find((d) => d.is_default) || list[0];
-        if (def) {
-          const detail = await axios.get(`${API}/api/v1/dashboards/${def.id}`, { headers: authHeaders() });
-          setDashboard(detail.data);
-        } else {
-          // First visit — create a default dashboard
-          const created = await axios.post(`${API}/api/v1/dashboards`, { name: 'My Dashboard', is_default: true }, { headers: authHeaders() });
-          const detail = await axios.get(`${API}/api/v1/dashboards/${created.data.id}`, { headers: authHeaders() });
-          setDashboard(detail.data);
-          setDashboardList([{ id: created.data.id, name: 'My Dashboard' }]);
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
+    useEffect(() => {
+        if (!token) return;
+        fetch(`${API}/cve/summary`, { headers: { Authorization: `Bearer ${token}` } })
+            .then((r) => r.json())
+            .then(setSummary)
+            .finally(() => setLoading(false));
+    }, [token]);
 
-  const handleLayoutChange = useCallback(async (positions: Layout[]) => {
-    if (!dashboard) return;
-    setSaving(true);
-    try {
-      await axios.patch(
-        `${API}/api/v1/dashboards/${dashboard.id}/layout`,
-        { positions: positions.map((p) => ({ id: p.i, grid_x: p.x, grid_y: p.y, grid_w: p.w, grid_h: p.h })) },
-        { headers: authHeaders() }
-      );
-    } finally {
-      setSaving(false);
+    if (loading) {
+        return <div className="p-8 text-center text-gray-500 font-mono animate-pulse py-32">Loading dashboard...</div>;
     }
-  }, [dashboard]);
 
-  const handleAddWidget = useCallback(async (widgetType: string) => {
-    if (!dashboard) return;
-    const def = WIDGET_REGISTRY[widgetType];
-    const res = await axios.post(
-      `${API}/api/v1/dashboards/${dashboard.id}/widgets`,
-      {
-        widget_type: widgetType,
-        title: def.label,
-        grid_x: 0,
-        grid_y: 99,
-        grid_w: def.defaultSize.w,
-        grid_h: def.defaultSize.h,
-        config: {},
-      },
-      { headers: authHeaders() }
-    );
-    setDashboard((prev) => prev ? {
-      ...prev,
-      widgets: [...prev.widgets, {
-        id: res.data.id,
-        widget_type: widgetType,
-        title: def.label,
-        grid_x: 0, grid_y: 99,
-        grid_w: def.defaultSize.w,
-        grid_h: def.defaultSize.h,
-        config: {},
-      }],
-    } : prev);
-  }, [dashboard]);
+    const latestScan =
+        summary?.latest_scan && "scanned_at" in summary.latest_scan
+            ? (summary.latest_scan as LatestScan)
+            : null;
 
-  const handleRemoveWidget = useCallback(async (widgetId: string) => {
-    if (!dashboard) return;
-    await axios.delete(`${API}/api/v1/dashboards/${dashboard.id}/widgets/${widgetId}`, { headers: authHeaders() });
-    setDashboard((prev) => prev ? { ...prev, widgets: prev.widgets.filter((w) => w.id !== widgetId) } : prev);
-  }, [dashboard]);
-
-  if (loading) {
     return (
-      <div className="flex items-center justify-center h-96 text-gray-400">
-        Loading dashboard...
-      </div>
+        <div className="p-6 space-y-6">
+            <div>
+                <h1 className="text-3xl font-bold font-mono tracking-tight text-white">
+                    Welcome{user?.username ? `, ${user.username}` : ""}
+                </h1>
+                <p className="text-gray-500 text-sm mt-1 font-mono">
+                    Argus &mdash; Kubernetes CVE detector &amp; report generator
+                </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <StatCard label="Feeds Configured" value={summary?.feeds ?? 0} color="border-gray-700/50" />
+                <StatCard label="CVEs Tracked" value={summary?.total_cves ?? 0} color="border-gray-700/50" />
+                <StatCard
+                    label="Affected (Latest Scan)"
+                    value={latestScan?.affected_count ?? "—"}
+                    sub={latestScan ? `of ${latestScan.total_cves_checked} checked` : "no scan yet"}
+                    color={latestScan && latestScan.affected_count > 0 ? "border-red-800/50" : "border-neon-green/30"}
+                />
+                <StatCard
+                    label="Cluster Version"
+                    value={latestScan?.cluster_version ?? "—"}
+                    color="border-neon-blue/30"
+                />
+            </div>
+
+            <div className="bg-gray-900/80 border border-gray-700/50 rounded p-4">
+                <div className="text-[10px] font-mono text-gray-500 uppercase tracking-widest mb-2">
+                    Severity Breakdown {latestScan ? "(Latest Scan)" : "(All Tracked CVEs)"}
+                </div>
+                <SevBar breakdown={(latestScan?.severity_breakdown ?? summary?.severity_breakdown) ?? {}} />
+            </div>
+
+            <div className="flex gap-3">
+                <Link
+                    href="/cve"
+                    className="px-4 py-2 text-xs font-mono uppercase tracking-widest bg-neon-blue/10 border border-neon-blue/40 text-neon-blue hover:bg-neon-blue/20 rounded transition-colors"
+                >
+                    {latestScan ? "View Full Report →" : "Run Your First Scan →"}
+                </Link>
+            </div>
+        </div>
     );
-  }
-
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white">{dashboard?.name || 'Dashboard'}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Drag and resize widgets to customise your view</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {saving && <span className="text-xs text-gray-500 animate-pulse">Saving...</span>}
-          {/* Dashboard switcher */}
-          {dashboardList.length > 1 && (
-            <select
-              className="text-sm bg-gray-800 border border-gray-700 text-gray-200 rounded-lg px-3 py-1.5"
-              value={dashboard?.id}
-              onChange={async (e) => {
-                const detail = await axios.get(`${API}/api/v1/dashboards/${e.target.value}`, { headers: authHeaders() });
-                setDashboard(detail.data);
-              }}
-            >
-              {dashboardList.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          )}
-          <button
-            onClick={async () => {
-              const name = prompt('Dashboard name:');
-              if (!name) return;
-              const created = await axios.post(`${API}/api/v1/dashboards`, { name }, { headers: authHeaders() });
-              const detail = await axios.get(`${API}/api/v1/dashboards/${created.data.id}`, { headers: authHeaders() });
-              setDashboard(detail.data);
-              setDashboardList((prev) => [...prev, { id: created.data.id, name }]);
-            }}
-            className="text-sm px-3 py-1.5 bg-gray-800 border border-gray-700 text-gray-300 rounded-lg hover:bg-gray-700 transition-colors"
-          >
-            + New Dashboard
-          </button>
-        </div>
-      </div>
-
-      {dashboard && (
-        <WidgetCanvas
-          dashboardId={dashboard.id}
-          widgets={dashboard.widgets}
-          onLayoutChange={handleLayoutChange}
-          onAddWidget={handleAddWidget}
-          onRemoveWidget={handleRemoveWidget}
-          editable
-        />
-      )}
-    </div>
-  );
 }

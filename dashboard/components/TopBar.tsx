@@ -29,7 +29,7 @@ export default function TopBar() {
                     </button>
                 )}
                 <div className="flex items-center">
-                    <span className="text-neon-blue">Pro-NDS</span>
+                    <span className="text-neon-blue">Argus</span>
                     <span className="mx-2">/</span>
                     <span className="text-text-secondary">Admin Console</span>
                 </div>

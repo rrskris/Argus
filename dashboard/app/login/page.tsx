@@ -4,6 +4,8 @@ import React, { useState } from 'react';
 import { useAuth } from '../../components/AuthContext';
 import { Shield } from 'lucide-react';
 
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 export default function LoginPage() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -17,7 +19,7 @@ export default function LoginPage() {
         setError('');
 
         try {
-            const res = await fetch('http://localhost:8001/auth/token', {
+            const res = await fetch(`${API}/auth/token`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams({
@@ -31,16 +33,15 @@ export default function LoginPage() {
             }
 
             const data = await res.json();
-            // For prototype, we mock role extraction since backend token doesn't expose it in clear text 
-            // (it is in JWT payload, but we don't have a decoder lib on frontend yet).
-            // We'll just trust the username 'admin' -> 'admin' for now, or fetch /me if we added it.
-            // Or we can rely on what the backend gave us? Backend just returns access_token.
-            // Let's assume 'admin' if username is 'admin', else 'viewer'.
 
-            const role = username === 'admin' ? 'admin' : 'viewer';
-            login(data.access_token, username, role);
-        } catch (err: any) {
-            setError(err.message);
+            const meRes = await fetch(`${API}/auth/me`, {
+                headers: { Authorization: `Bearer ${data.access_token}` },
+            });
+            const me = await meRes.json();
+
+            login(data.access_token, me.username, me.role);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Login failed');
         } finally {
             setLoading(false);
         }
@@ -53,8 +54,8 @@ export default function LoginPage() {
                     <div className="p-3 bg-blue-500/10 rounded-full mb-3">
                         <Shield size={40} className="text-neon-blue" />
                     </div>
-                    <h1 className="text-2xl font-bold text-primary tracking-tight">Welcome to Provenance</h1>
-                    <p className="text-text-secondary text-sm mt-1">Secure Cloud Infrastructure Discovery</p>
+                    <h1 className="text-2xl font-bold text-primary tracking-tight">Welcome to Argus</h1>
+                    <p className="text-text-secondary text-sm mt-1">Kubernetes CVE Detection &amp; Reporting</p>
                 </div>
 
                 {error && (
@@ -96,7 +97,7 @@ export default function LoginPage() {
                 </form>
 
                 <div className="mt-6 text-center text-xs text-text-secondary">
-                    Protected by Provenance RBAC &bull; v0.1.0
+                    Argus &bull; v1.0
                 </div>
             </div>
         </div>

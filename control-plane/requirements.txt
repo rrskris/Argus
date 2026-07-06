@@ -13,3 +13,4 @@ apscheduler
 reportlab
 cryptography
 pyyaml
+pytest

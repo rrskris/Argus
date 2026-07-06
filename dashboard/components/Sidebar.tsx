@@ -2,27 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useAuth } from './AuthContext';
-import { LogOut, User } from 'lucide-react';
 
 export default function Sidebar() {
     const pathname = usePathname();
-    const { user, logout } = useAuth();
 
     if (pathname === '/login') return null;
 
     const navItems = [
         { name: 'Dashboard', path: '/', icon: '🏠' },
-        { name: 'Accounts', path: '/accounts', icon: '☁️' },
-        { name: 'Inventory', path: '/inventory', icon: '📦' },
-        { name: 'Endpoints', path: '/endpoints', icon: '💻' },
-        { name: 'CVE', path: '/cve', icon: '🔴' },
-        { name: 'Compliance', path: '/compliance', icon: '🛡️' },
-        { name: 'RBAC', path: '/rbac', icon: '🔐' },
-        { name: 'Audit Log', path: '/audit', icon: '📋' },
-        { name: 'Observability', path: '/observability', icon: '📡' },
-        { name: 'SIEM', path: '/siem', icon: '⚡' },
-        { name: 'Integrations', path: '/integrations', icon: '🧩' },
+        { name: 'CVE Scanner', path: '/cve', icon: '🔴' },
         { name: 'Docs', path: '/docs', icon: '📖' },
         { name: 'Settings', path: '/settings', icon: '⚙️' },
     ];

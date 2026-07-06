@@ -3,7 +3,7 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from pydantic import BaseModel, HttpUrl
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from ..database import get_db
 from ..auth import get_current_active_user
 from ..models import CVEFeed, CVEEntry, ClusterRegistration, K8sCVEScanResult
 from ..cve_service import cve_service, K8S_FEED_NAME, K8S_OFFICIAL_CVE_FEED_URL
+from ..report_service import build_cve_scan_pdf
 
 router = APIRouter(prefix="/cve", tags=["CVE"])
 
@@ -164,6 +165,7 @@ def list_entries(
                 "severity": e.severity,
                 "cvss_score": e.cvss_score,
                 "published_date": e.published_date.isoformat() if e.published_date else None,
+                "affected_components": e.affected_components,
                 "fixed_in": e.fixed_in,
                 "references": (e.references or [])[:3],
             }
@@ -193,6 +195,23 @@ def get_latest_scan(
     if not result:
         return {"message": "No scan results yet. POST /cve/scan to run the first scan."}
     return result
+
+
+@router.get("/scan/latest/report.pdf")
+def get_latest_scan_report_pdf(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_active_user),
+):
+    """Download the most recent cluster scan as a PDF report."""
+    scan = cve_service.get_latest_scan(db)
+    if not scan:
+        raise HTTPException(404, "No scan results yet. Run a scan first.")
+    pdf_bytes = build_cve_scan_pdf(scan)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=argus-cve-report.pdf"},
+    )
 
 
 # ── Summary ────────────────────────────────────────────────────────────────────

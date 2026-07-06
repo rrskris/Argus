@@ -37,11 +37,11 @@ interface Addon {
 }
 
 interface ClusterScan {
-    scan_id: string; cluster_id: string; scanned_at: string;
+    scan_id?: string; cluster_id?: string; scanned_at: string;
     cluster_version: string | null; node_versions: string[];
     addons: Addon[]; total_cves_checked: number; affected_count: number;
     severity_breakdown: Record<string, number>; findings: K8sFinding[];
-    status: string; error: string | null;
+    status?: string; error?: string | null;
 }
 
 interface ClusterInfo {
@@ -57,6 +57,13 @@ interface ClusterInfo {
 interface K8sFeedStatus {
     registered: boolean; feed_id?: string; entry_count?: number;
     last_fetched?: string | null; feed_url: string; enabled?: boolean;
+}
+
+interface CVEEntry {
+    id: string; cve_id: string; title: string; severity: string; cvss_score: number | null;
+    published_date: string | null;
+    affected_components: { component: string; version?: string }[] | null;
+    fixed_in: string[] | null;
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -118,7 +125,7 @@ export default function CVEPage() {
     const [refreshingAll, setRefreshingAll] = useState(false);
 
     // CVE browser state
-    const [entries, setEntries] = useState<any[]>([]);
+    const [entries, setEntries] = useState<CVEEntry[]>([]);
     const [totalEntries, setTotalEntries] = useState(0);
     const [sevFilter, setSevFilter] = useState("ALL");
     const [searchTerm, setSearchTerm] = useState("");
@@ -156,6 +163,17 @@ export default function CVEPage() {
         }
     }, [token]);
 
+    // Free, self-scan path — scans the cluster Argus is running in (no cluster
+    // registration required). This is the primary v1 detector flow.
+    const loadSelfScan = useCallback(async () => {
+        if (!token) return;
+        const res = await fetch(`${API}/cve/scan/latest`, { headers });
+        if (res.ok) {
+            const d = await res.json();
+            if (d.findings) setClusterScan(d);
+        }
+    }, [token]);
+
     const loadFeeds = useCallback(async () => {
         if (!token) return;
         const res = await fetch(`${API}/cve/feeds`, { headers });
@@ -177,11 +195,14 @@ export default function CVEPage() {
 
     useEffect(() => {
         if (!token) return;
+        // Kicks off the initial data load for this page, not derived state.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setLoading(true);
-        Promise.all([loadK8sData(), loadFeeds(), loadEntries()]).finally(() => setLoading(false));
+        Promise.all([loadK8sData(), loadFeeds(), loadEntries(), loadSelfScan()]).finally(() => setLoading(false));
     }, [token]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (selectedClusterId) loadClusterScan(selectedClusterId);
     }, [selectedClusterId]);
 
@@ -216,6 +237,39 @@ export default function CVEPage() {
                 alert(`Scan failed: ${err.detail ?? "Unknown error"}`);
             }
         } finally { setScanning(false); }
+    };
+
+    const runSelfScan = async () => {
+        setScanning(true);
+        setClusterScan(null);
+        try {
+            const res = await fetch(`${API}/cve/scan`, { method: "POST", headers });
+            if (res.ok) {
+                setClusterScan(await res.json());
+            } else {
+                const err = await res.json();
+                alert(`Scan failed: ${err.detail ?? "Unknown error"}`);
+            }
+        } finally { setScanning(false); }
+    };
+
+    // Primary v1 action: scan the cluster Argus runs in unless a registered
+    // (EE) cluster is selected, in which case scan that one instead.
+    const runScan = () => (selectedClusterId ? runClusterScan() : runSelfScan());
+
+    const downloadReport = async () => {
+        const res = await fetch(`${API}/cve/scan/latest/report.pdf`, { headers });
+        if (!res.ok) {
+            alert("No scan results yet — run a scan first.");
+            return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "argus-cve-report.pdf";
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     const refreshFeed = async (id: string) => {
@@ -261,11 +315,6 @@ export default function CVEPage() {
         }
     };
 
-    // ── Derived ──────────────────────────────────────────────────────────────
-
-    const selectedCluster = clusters.find((c) => c.id === selectedClusterId) ?? null;
-    const breakdown = clusterScan?.severity_breakdown ?? selectedCluster?.latest_scan?.severity_breakdown ?? {};
-
     if (loading) {
         return <div className="p-8 text-center text-gray-500 font-mono animate-pulse py-32">Loading CVE data...</div>;
     }
@@ -290,11 +339,19 @@ export default function CVEPage() {
                         {syncingFeed ? "Syncing..." : "↓ Sync K8s Feed"}
                     </button>
                     <button
-                        onClick={runClusterScan}
-                        disabled={scanning || !selectedClusterId}
+                        onClick={runScan}
+                        disabled={scanning}
                         className="px-4 py-2 text-xs font-mono uppercase tracking-widest bg-neon-blue/10 border border-neon-blue/40 text-neon-blue hover:bg-neon-blue/20 rounded transition-colors disabled:opacity-50"
                     >
                         {scanning ? "Scanning..." : "▶ Scan Cluster"}
+                    </button>
+                    <button
+                        onClick={downloadReport}
+                        disabled={!clusterScan}
+                        title="Download the latest scan as a PDF report"
+                        className="px-4 py-2 text-xs font-mono uppercase tracking-widest border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 rounded transition-colors disabled:opacity-50"
+                    >
+                        ⬇ Download Report
                     </button>
                 </div>
             </div>
@@ -344,38 +401,33 @@ export default function CVEPage() {
             {/* ── TAB: Cluster Scan ─────────────────────────────────────────────── */}
             {activeTab === "k8s" && (
                 <div className="space-y-5">
-                    {/* Cluster picker */}
-                    {clusters.length === 0 ? (
-                        <div className="text-center py-16 text-gray-600 font-mono">
-                            No registered clusters found.<br />
-                            <span className="text-gray-500">Register a cluster in the <a href="/multi-cluster" className="text-neon-blue underline">Multi-Cluster</a> page first.</span>
-                        </div>
-                    ) : (
-                        <>
-                            <div className="flex items-center gap-4 flex-wrap">
-                                <label className="text-xs font-mono text-gray-500 uppercase tracking-widest">Cluster</label>
-                                <div className="flex gap-2 flex-wrap">
-                                    {clusters.map((c) => (
-                                        <button
-                                            key={c.id}
-                                            onClick={() => setSelectedClusterId(c.id)}
-                                            className={`px-3 py-1.5 text-xs font-mono rounded border transition-colors ${
-                                                selectedClusterId === c.id
-                                                    ? "border-neon-blue bg-neon-blue/10 text-neon-blue"
-                                                    : "border-gray-700 text-gray-400 hover:border-gray-500"
-                                            }`}
-                                        >
-                                            {c.name}
-                                            <span className={`ml-1.5 text-[10px] ${c.active ? "text-neon-green" : "text-gray-600"}`}>
-                                                {c.environment}
-                                            </span>
-                                        </button>
-                                    ))}
-                                </div>
+                    {/* Cluster picker — only relevant once additional clusters are registered */}
+                    {clusters.length > 0 && (
+                        <div className="flex items-center gap-4 flex-wrap">
+                            <label className="text-xs font-mono text-gray-500 uppercase tracking-widest">Cluster</label>
+                            <div className="flex gap-2 flex-wrap">
+                                {clusters.map((c) => (
+                                    <button
+                                        key={c.id}
+                                        onClick={() => setSelectedClusterId(c.id)}
+                                        className={`px-3 py-1.5 text-xs font-mono rounded border transition-colors ${
+                                            selectedClusterId === c.id
+                                                ? "border-neon-blue bg-neon-blue/10 text-neon-blue"
+                                                : "border-gray-700 text-gray-400 hover:border-gray-500"
+                                        }`}
+                                    >
+                                        {c.name}
+                                        <span className={`ml-1.5 text-[10px] ${c.active ? "text-neon-green" : "text-gray-600"}`}>
+                                            {c.environment}
+                                        </span>
+                                    </button>
+                                ))}
                             </div>
+                        </div>
+                    )}
 
-                            {/* Cluster scan summary */}
-                            {clusterScan && (
+                    {/* Cluster scan summary */}
+                    {clusterScan && (
                                 <div className="space-y-4">
                                     {/* Info bar */}
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -515,23 +567,21 @@ export default function CVEPage() {
                                 </div>
                             )}
 
-                            {!clusterScan && !scanning && selectedClusterId && (
-                                <div className="text-center py-16 text-gray-600 font-mono">
-                                    No scan results for this cluster yet.{" "}
-                                    <button onClick={runClusterScan} className="text-neon-blue underline">Run scan now</button>
-                                </div>
-                            )}
+                    {!clusterScan && !scanning && (
+                        <div className="text-center py-16 text-gray-600 font-mono">
+                            No scan results yet.{" "}
+                            <button onClick={runScan} className="text-neon-blue underline">Run scan now</button>
+                        </div>
+                    )}
 
-                            {scanning && (
-                                <div className="text-center py-16 font-mono">
-                                    <div className="text-neon-blue animate-pulse text-lg mb-2">Scanning cluster...</div>
-                                    <div className="text-gray-500 text-sm">
-                                        Detecting Kubernetes version, node kubelet versions, and running add-ons,
-                                        then matching against {k8sFeedStatus?.entry_count ?? "all"} CVEs.
-                                    </div>
-                                </div>
-                            )}
-                        </>
+                    {scanning && (
+                        <div className="text-center py-16 font-mono">
+                            <div className="text-neon-blue animate-pulse text-lg mb-2">Scanning cluster...</div>
+                            <div className="text-gray-500 text-sm">
+                                Detecting Kubernetes version, node kubelet versions, and running add-ons,
+                                then matching against {k8sFeedStatus?.entry_count ?? "all"} CVEs.
+                            </div>
+                        </div>
                     )}
                 </div>
             )}
@@ -571,7 +621,7 @@ export default function CVEPage() {
                                 ].map(({ key, placeholder }) => (
                                     <input key={key}
                                         placeholder={placeholder}
-                                        value={(newFeed as any)[key]}
+                                        value={newFeed[key as keyof typeof newFeed]}
                                         onChange={(e) => setNewFeed({ ...newFeed, [key]: e.target.value })}
                                         className="bg-black/40 border border-gray-700 text-sm font-mono text-gray-200 rounded px-3 py-2 placeholder-gray-600 focus:outline-none focus:border-neon-blue/50"
                                     />
@@ -702,7 +752,7 @@ export default function CVEPage() {
                                         <td className="px-4 py-3 text-gray-300">{e.cvss_score?.toFixed(1) ?? "—"}</td>
                                         <td className="px-4 py-3 text-gray-300 max-w-sm truncate" title={e.title}>{e.title}</td>
                                         <td className="px-4 py-3">
-                                            {(e.affected_components ?? []).slice(0, 2).map((c: any, i: number) => (
+                                            {(e.affected_components ?? []).slice(0, 2).map((c, i) => (
                                                 <span key={i} className="inline-block mr-1 px-1 py-0.5 bg-gray-800 border border-gray-700 text-gray-400 text-[10px] rounded">
                                                     {c.component}
                                                 </span>

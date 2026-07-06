@@ -176,6 +176,7 @@ class CVEScanResult(Base):
     scanned_at = Column(DateTime, default=datetime.datetime.utcnow)
     cluster_version = Column(String, nullable=True)
     node_versions = Column(JSON, nullable=True)
+    addons = Column(JSON, nullable=True)
     total_cves_checked = Column(Integer, default=0)
     affected_count = Column(Integer, default=0)
     findings = Column(JSON, nullable=True)

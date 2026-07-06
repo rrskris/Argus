@@ -18,6 +18,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         // Load from local storage
         const saved = localStorage.getItem("pro-nds-theme") as Theme;
         if (saved) {
+            // One-time hydration from browser-only storage, not derived state.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setTheme(saved);
             document.documentElement.setAttribute("data-theme", saved);
         } else {

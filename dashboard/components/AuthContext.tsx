@@ -32,6 +32,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const storedUser = localStorage.getItem('user');
 
         if (storedToken && storedUser) {
+            // One-time hydration from browser-only storage, not derived state.
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setToken(storedToken);
             setUser(JSON.parse(storedUser));
         }
@@ -44,7 +46,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         if (!token && pathname !== '/login') {
             router.push('/login');
         } else if (token && pathname === '/login') {
-            router.push('/inventory');
+            router.push('/');
         }
     }, [token, pathname, isLoading, router]);
 
@@ -54,7 +56,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setUser(newUser);
         localStorage.setItem('token', newToken);
         localStorage.setItem('user', JSON.stringify(newUser));
-        router.push('/inventory');
+        router.push('/');
     };
 
     const logout = () => {
