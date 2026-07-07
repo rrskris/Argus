@@ -1,62 +1,45 @@
-# Pro-NDS Integration Standard
+# Integration / extension standard
 
-## 1. Purpose of Integrations
-Integrations in Pro-NDS (Provenance Network Discovery System) serve as modular "Compliance Packs" or "Security Frameworks". They allow users to enable specific sets of security checks (e.g., CIS AWS, PCI-DSS, HIPAA) or third-party data sources (e.g., NVD, OSV) without bloating the core engine with irrelevant logic for every user.
+> **Status: design intent, partially implemented.** What exists today: the
+> `extensions/` directory of YAML integration packs (e.g.
+> `extensions/extensions/integrations/cis-aws-1.5.yaml`) and the
+> `TenantFramework` model that links a tenant to an enabled framework. The
+> marketplace router and the Go discovery engine described in earlier
+> versions of this document were removed in the v1.1.0 cleanup and do not
+> exist — this document now records the standard for when that surface is
+> rebuilt, without pretending it's live.
 
-## 2. Integration Architecture
-An integration consists of three parts:
-1.  **Metadata (Control Plane)**: define the integration's name, version, and pricing.
-2.  **Logic (Discovery Engine)**: The actual code (Go/Python) that performs the scan or check.
-3.  **Activation (Database)**: A `TenantFramework` record that links a tenant to an integration.
+## Purpose
 
-## 3. Standard Format (Metadata)
-All integrations must be registered in `control_plane/app/routers/integrations.py` using the following JSON schema:
+Integrations are modular "compliance packs" or external finding sources —
+sets of checks (CIS AWS, PCI-DSS mappings) or connectors (Trivy/Grype
+reports, Kyverno PolicyReports) that a tenant enables without bloating the
+core scanner with logic irrelevant to everyone else.
 
-```json
-{
-    "id": "unique-kebab-case-id",
-    "name": "Human Readable Name",
-    "description": "Short description of what this integration provides.",
-    "version": "1.0.0",
-    "is_premium": false,
-    "price_tier": "Free" // "Free", "Standard", "Enterprise"
-}
-```
+## The rule every integration must follow
 
-### Naming Convention
--   **ID**: `vendor-product-version` (e.g., `cis-aws-1.5`, `pci-dss-3.2`)
--   **Name**: Title Case (e.g., `CIS AWS Foundations Benchmark`)
--   **Version**: Semantic Versioning (e.g., `1.5.0`)
+**External findings map into the canonical finding shape and flow through
+the existing engines** — `compute_contextual_score()` (`scoring.py`) and
+`build_remediation()` (`remediation.py`) — rather than defining their own
+severity or advice format. One ranked list, one explanation format, no
+parallel alert streams. The worked example of this pattern is the
+[Trivy/Grype ingestion design](trivy-grype-integration.md).
 
-## 4. Implementation Standard (Logic)
-All compliance checks must be implemented in the `discovery_engine` (Go) to ensure performance.
+## Pack format (`extensions/`)
 
-### Location
-`discovery_engine/internal/compliance/checks.go`
+- **ID**: `vendor-product-version`, kebab-case (e.g. `cis-aws-1.5`)
+- **Name**: Title Case (e.g. `CIS AWS Foundations Benchmark`)
+- **Version**: semver, incremented on any logic change
+- Each pack is one YAML file: metadata (id/name/description/version/tier)
+  plus its rule or field-mapping payload.
 
-### Function Signature
-```go
-func CheckName(asset scanner.Asset) *Result
-```
+## Stability rules
 
-### Registration
-Use the `RegisterCheck` function in `init()`:
-```go
-func init() {
-    RegisterCheck("UNIQUE_Check_ID", CheckFunction)
-}
-```
-
-## 5. Ensuring Stability (How to prevent breaking changes)
-To ensure the app remains stable when adding new integrations:
-
-1.  **Isolation**: Each integration's logic must be self-contained in its own function.
-2.  **Graceful Failure**: Checks must return `nil` if they are not applicable to the asset type, rather than panicking.
-3.  **Feature Flagging**: The `Evaluate` engine checks if the integration is enabled for the tenant before running the check (Coming in v1.1).
-4.  **Versioning**: Always increment the version in metadata when changing logic.
-
-## 6. Development Workflow
-1.  **Add Metadata**: Update `AVAILABLE_FRAMEWORKS` in `control_plane/.../integrations.py`.
-2.  **Add Logic**: Create a new check function in `discovery_engine/.../checks.go`.
-3.  **Verify**: Restart the stack. The new integration will appear in the "Marketplace".
-4.  **Test**: Enable it in the UI and run a scan.
+1. Each integration is self-contained — no cross-pack imports.
+2. Checks return "not applicable" for foreign asset types; never crash the
+   scan run.
+3. Activation is per-tenant (`TenantFramework`); disabled packs cost nothing
+   at scan time.
+4. A pack's benchmark citations must name the exact benchmark version
+   (e.g. "CIS Kubernetes Benchmark v1.12.0"), the same rule the core
+   remediation module follows.

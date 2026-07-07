@@ -7,10 +7,13 @@ Most scanners stop at detection: here's 800 CVEs, here's 50 risky RBAC bindings,
 ## What it does today
 
 - **CVE scanning** — connects to your live cluster (in-cluster or via kubeconfig), fingerprints the control plane version and running add-ons (`ingress-nginx`, `coredns`, `metrics-server`, CSI drivers, etc.), and cross-references what's actually running against the official Kubernetes CVE feed and NVD. No guessing which CVEs apply to you — only the ones that match your real component versions show up.
-- **RBAC misconfiguration scanning** — walks every Role, ClusterRole, and binding in the cluster looking for wildcard permissions, broad Secrets access, pod exec/attach grants, and cluster-admin-equivalent access handed to broad identities (default service accounts, `system:authenticated`). Filters out the expected noise from Kubernetes' own built-in system roles so you see real problems, not platform internals.
-- **Contextual Risk Score** — the same CVE or RBAC finding ranks differently depending on your answers to four questions: is this production or dev? What data lives here (PII, financial, PHI)? Which compliance frameworks apply (PCI-DSS, HIPAA, SOC2)? Is it internet-facing? The score is never a black box — every finding shows exactly which factors pushed it up or down.
-- **PDF reporting** — export any scan as a shareable report.
+- **RBAC misconfiguration scanning** — walks every Role, ClusterRole, and binding in the cluster against 11 rules covering the CIS Kubernetes Benchmark v1.12.0 section 5.1 controls that are inspectable from RBAC state: wildcard permissions, Secrets access, exec/attach grants, escalate/bind/impersonate verbs, `nodes/proxy`, CSR approval, webhook config writes, ServiceAccount token creation, workload/PV creation, and cluster-admin bound to broad identities (`default` SA, `system:authenticated`, `system:masters`). Built-in system roles are filtered out so you see real problems, not platform internals. Full catalog: [docs/rbac-rules.md](docs/rbac-rules.md).
+- **Contextual Risk Score** — the same CVE or RBAC finding ranks differently depending on your answers to four questions: is this production or dev? What data lives here (PII, financial, PHI)? Which compliance frameworks apply (PCI-DSS, HIPAA, SOC2)? Is it internet-facing? The score is never a black box — every finding shows exactly which factors pushed it up or down. Formula and weights: [docs/contextual-risk-score.md](docs/contextual-risk-score.md).
+- **Remediation on every finding** — not just detection: each finding carries what to do (with the `kubectl` command), why it matters in *your* context, the CIS v1.12.0 control it maps to, a compliance note (PCI-DSS/HIPAA/SOC2), and an audit-trail note — in the API, the dashboard, and the PDF.
+- **CI/CD gating** — a headless CLI scans RBAC manifests at PR time (shift-left) or a live cluster post-deploy, and fails the pipeline on the *contextual* score, not a flat severity: the same finding that blocks a production/PCI pipeline can pass in dev. Ships with a GitHub Action and GitLab/Jenkins/Argo CD recipes: [docs/ci-integration.md](docs/ci-integration.md).
+- **PDF reporting** — export any scan (CVE or RBAC) as a shareable report.
 - **Multi-cluster comparison** — register multiple clusters and scan/compare across them.
+- **Kyverno policies** — admission-time counterparts of the RBAC rules in [`policies/kyverno/`](policies/kyverno/README.md), with an honest map of what the upstream policy library already covers and two policies being contributed upstream.
 
 ## Why it's different
 
@@ -26,13 +29,20 @@ deploy/          docker-compose stack (Postgres + control-plane + dashboard)
 
 **Control plane** ingests CVE feeds (`cve_service.py`), connects to the cluster (`k8s_client.py`), detects running add-ons by image (`addon_detection.py`), evaluates RBAC risk rules (`rbac_service.py`), and scores every finding through one shared engine (`scoring.py`) so CVE and RBAC findings are ranked the same way. Results are exposed over a REST API and exportable as PDF (`report_service.py`).
 
-Key endpoints:
+Key endpoints (full reference: [docs/api.md](docs/api.md)):
 - `POST /cve/scan`, `GET /cve/scan/latest`, `GET /cve/scan/latest/report.pdf` — scan the connected cluster, fetch or export the last result
 - `GET /cve/summary` — severity breakdown across the current feed
 - `POST /cve/k8s/clusters/{id}/scan`, `GET /cve/k8s/clusters` — multi-cluster scanning and comparison
 - `GET|POST /cve/feeds` — manage which CVE feeds are active
 - `GET|PUT /cve/context` — read/update your tenant's risk context (environment, data classification, compliance scope, exposure) that drives the Contextual Risk Score
-- `POST /rbac/scan`, `GET /rbac/scan/latest` — scan the cluster's Roles/ClusterRoles/bindings for misconfigurations
+- `POST /rbac/scan`, `GET /rbac/scan/latest`, `GET /rbac/scan/latest/report.pdf` — scan the cluster's Roles/ClusterRoles/bindings for misconfigurations, fetch or export the result
+
+For pipelines there's also a headless CLI needing no server or database at all:
+
+```bash
+cd control-plane
+python -m app.cli scan rbac --manifests ./k8s/ --context-file argus.yaml --fail-on-score 20
+```
 
 Argus is structured open-core (see `control-plane/app/license.py`): everything above is Community Edition and runs fully self-hosted with no license required. Advanced compliance mapping, SSO, multi-cluster fleet management, and other Enterprise features are gated behind an optional license token — none of that is required to use the scanner.
 
@@ -67,6 +77,12 @@ cd dashboard
 npm ci
 npm run dev
 ```
+
+## Documentation
+
+Detailed docs live in [docs/](docs/README.md): architecture, the scoring
+formula, the full RBAC rule catalog with CIS v1.12.0 mappings, the REST API
+reference, and CI/CD integration recipes.
 
 ## License
 
