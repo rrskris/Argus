@@ -214,7 +214,85 @@ def _print_table(result: dict) -> None:
         if refs:
             print(f"           refs: {refs}")
         print()
+_SEVERITY_TO_SARIF_LEVEL = {
+    "CRITICAL": "error",
+    "HIGH": "error",
+    "MEDIUM": "warning",
+    "LOW": "note",
+    "UNKNOWN": "note",
+}
 
+
+def _finding_rows(result: dict) -> list:
+    """Normalize findings into a generic row shape shared by SARIF/JUnit formatters."""
+    rows = []
+    for f in result["findings"]:
+        rows.append({
+            "rule_id": f["rule_type"],
+            "level": _SEVERITY_TO_SARIF_LEVEL.get(f.get("severity", "UNKNOWN"), "note"),
+            "title": f["title"],
+            "message": f["remediation"]["action"],
+            "refs": f["remediation"].get("benchmark_refs") or [],
+            "raw": f,
+        })
+    return rows
+
+
+def _print_sarif(result: dict) -> None:
+    rows = _finding_rows(result)
+
+    rules_by_id = {}
+    for row in rows:
+        if row["rule_id"] not in rules_by_id:
+            rules_by_id[row["rule_id"]] = {
+                "id": row["rule_id"],
+                "name": row["rule_id"],
+                "shortDescription": {"text": row["title"]},
+                "helpUri": "https://github.com/rrskris/Argus",
+                "properties": {"tags": ["rbac", "security"]},
+            }
+
+    sarif_results = []
+    for row in rows:
+        f = row["raw"]
+        binding = f["binding"]
+        location_name = binding.get("namespace") or "cluster-scoped"
+        taxa = [
+            {"toolComponent": {"name": r["benchmark"]}, "id": r.get("id") or r["benchmark"]}
+            for r in row["refs"]
+        ]
+        sarif_results.append({
+            "ruleId": row["rule_id"],
+            "level": row["level"],
+            "message": {"text": row["message"]},
+            "locations": [{
+                "logicalLocations": [{
+                    "name": f"{binding['kind']}/{binding['name']}",
+                    "fullyQualifiedName": f"{location_name}/{binding['kind']}/{binding['name']}",
+                }]
+            }],
+            "properties": {
+                "contextual_score": f.get("contextual_score"),
+                "severity": f.get("severity"),
+            },
+            **({"taxa": taxa} if taxa else {}),
+        })
+
+    sarif = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "Argus",
+                    "informationUri": "https://github.com/rrskris/Argus",
+                    "rules": list(rules_by_id.values()),
+                }
+            },
+            "results": sarif_results,
+        }],
+    }
+    print(json.dumps(sarif, indent=2))
 
 def _apply_gate(findings: list, fail_on_score, fail_on_severity) -> int:
     breaches = []
@@ -255,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     rbac.add_argument("--context-file", help="argus.yaml risk context (risk context as code)")
     rbac.add_argument("--fail-on-score", type=float, help="Exit 1 if any finding scores >= this")
     rbac.add_argument("--fail-on-severity", help="Exit 1 if any finding is at/above this severity")
-    rbac.add_argument("--output", choices=["table", "json"], default="table")
+    rbac.add_argument("--output", choices=["table", "json", "sarif"], default="table")
 
     args = parser.parse_args(argv)
 
@@ -282,9 +360,11 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     if args.output == "json":
-        print(json.dumps(result, indent=2))
+      print(json.dumps(result, indent=2))
+    elif args.output == "sarif":
+      _print_sarif(result)
     else:
-        _print_table(result)
+      _print_table(result)
 
     return _apply_gate(findings, fail_on_score, fail_on_severity)
 

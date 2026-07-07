@@ -194,3 +194,28 @@ def test_context_file_threshold_applies_without_flag(risky_dir, tmp_path):
     ctx_file.write_text("environment: production\nfail_on_score: 5\n")
 
     assert main(["scan", "rbac", "--manifests", str(risky_dir), "--context-file", str(ctx_file)]) == 1
+def test_sarif_output_is_valid_shape(risky_dir, capsys):
+    code = main(["scan", "rbac", "--manifests", str(risky_dir), "--output", "sarif"])
+
+    sarif = json.loads(capsys.readouterr().out)
+
+    assert sarif["version"] == "2.1.0"
+    assert "$schema" in sarif
+    assert len(sarif["runs"]) == 1
+
+    run = sarif["runs"][0]
+    assert run["tool"]["driver"]["name"] == "Argus"
+    rules = run["tool"]["driver"]["rules"]
+    assert rules, "expected at least one rule"
+    assert all("id" in r and "shortDescription" in r for r in rules)
+
+    results = run["results"]
+    assert len(results) >= 1
+    for r in results:
+        assert r["ruleId"] in {rule["id"] for rule in rules}
+        assert r["level"] in {"error", "warning", "note", "none"}
+        assert r["message"]["text"]
+        assert r["locations"][0]["logicalLocations"][0]["name"]
+
+    # sarif output must still not affect the gate's exit code semantics
+    assert code == 0  # no --fail-on-score/--fail-on-severity passed here
