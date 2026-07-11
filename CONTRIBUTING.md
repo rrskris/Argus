@@ -87,7 +87,12 @@ for the worked design.
 3. `make test` passes; add coverage for new behavior.
 4. Conventional commit messages (`feat:`, `fix:`, `docs:`, `chore:`) — see the
    existing history.
-5. Open a PR with the template filled in.
+5. **Sign off every commit** (`git commit -s`). We require the
+   [Developer Certificate of Origin](https://developercertificate.org/) — the
+   `-s` flag adds the `Signed-off-by:` line that certifies you wrote the change
+   or have the right to submit it. CI checks this on every PR; forgot one?
+   `git commit --amend -s` (or `git rebase --signoff main`).
+6. Open a PR with the template filled in.
 
 ## Project layout
 

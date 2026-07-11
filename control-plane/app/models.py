@@ -280,7 +280,7 @@ class WidgetInstance(Base):
     dashboard = relationship("DashboardLayout", back_populates="widgets")
 
 
-# ── EE Features ────────────────────────────────────────────────────────────────
+# ── Multi-cluster ──────────────────────────────────────────────────────────────
 
 class AttestationKey(Base):
     __tablename__ = "attestation_keys"

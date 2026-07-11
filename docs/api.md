@@ -26,7 +26,6 @@ curl -s http://localhost:8000/auth/me -H "Authorization: Bearer $TOKEN"
 | `GET /auth/me` | Current user |
 | `POST /auth/seed` | (Re-)run admin bootstrap — also runs automatically on startup |
 | `GET /` | Unauthenticated health check |
-| `GET /license/status` | CE/EE license gate status |
 
 Errors are standard FastAPI shape: `{"detail": "..."}` with 401 (bad/missing
 token), 404 (missing resource), 400 (validation), 502 (upstream fetch
@@ -87,7 +86,7 @@ and `remediation`:
 | `POST /cve/k8s/feed/sync` | Register + refresh the official Kubernetes CVE feed in one call (idempotent) |
 | `GET /cve/k8s/feed` | Status of the official feed |
 
-### Multi-cluster (EE path)
+### Multi-cluster
 
 | Method + path | Purpose |
 |---|---|

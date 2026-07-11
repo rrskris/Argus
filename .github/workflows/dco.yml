@@ -1,0 +1,30 @@
+name: DCO
+
+on: [pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Signed-off-by on new commits
+        run: |
+          # Commits committed before 2026-07-12 00:00 UTC predate the DCO
+          # requirement and are grandfathered.
+          CUTOFF=1783814400
+          fail=0
+          for sha in $(git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
+            ct=$(git show -s --format=%ct "$sha")
+            [ "$ct" -lt "$CUTOFF" ] && continue
+            if ! git show -s --format=%B "$sha" | grep -qi '^Signed-off-by: '; then
+              echo "::error::Commit $sha is missing a Signed-off-by line. Amend with: git commit --amend -s (or rebase with --signoff)"
+              fail=1
+            fi
+          done
+          exit $fail
