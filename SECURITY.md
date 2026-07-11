@@ -1,5 +1,16 @@
 # Security policy
 
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| latest release (currently 1.1.x) | ✅ |
+| `main` (`:edge` images) | ✅ best-effort |
+| older releases | ❌ — upgrade to the latest release |
+
+Security fixes land on `main` and ship in the next release; we do not backport
+to older versions at the project's current size.
+
 ## Reporting a vulnerability
 
 Kaaval is a security tool, so we take issues in Kaaval itself seriously.

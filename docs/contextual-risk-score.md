@@ -84,7 +84,7 @@ Three ways, same four fields:
   it. A dev-environment weight of 0.5 halving everything is the honest
   statement that dev findings are usually not incidents.
 - **Small, legible weight tables** — auditable at a glance in `scoring.py`.
-  Custom per-org weights are a planned Enterprise feature; the CE formula is
+  Custom per-org weights are on the roadmap; the current formula is
   fixed so that a score of 38.9 means the same thing in every report.
 - **Score explains ranking; severity stays untouched** — `severity` and
   `cvss_score` fields are unchanged on every finding, so anything built on

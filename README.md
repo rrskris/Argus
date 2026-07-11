@@ -66,7 +66,7 @@ docker run --rm -v "$PWD/k8s:/scan" ghcr.io/kaaval/kaaval \
 
 Or from source: `cd control-plane && python -m app.cli scan rbac --manifests ./k8s/ --fail-on-score 20`.
 
-Kaaval is structured open-core (see `control-plane/app/license.py`): everything above is Community Edition and runs fully self-hosted with no license required. Advanced compliance mapping, SSO, multi-cluster fleet management, and other Enterprise features are gated behind an optional license token — none of that is required to use the scanner.
+Kaaval is fully open source under Apache-2.0 — no open-core split, no feature gates, no license tokens. Everything the project ships runs self-hosted, and it will stay that way: the project is being built toward CNCF vendor-neutrality standards.
 
 ## Quickstart
 

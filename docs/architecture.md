@@ -64,15 +64,15 @@ tested.
 | `report_service.py` | CVE + RBAC PDF reports |
 | `cli.py` | headless scan + gating for CI/CD |
 | `models.py` | SQLAlchemy models (below) |
-| `audit.py`, `license.py` | audit log entries; CE/EE license gate |
+| `audit.py` | audit log entries |
 
 ## Data model (the parts that matter)
 
 - `Tenant`, `User` — single-tenant in practice today; every scoped table
   carries `tenant_id`.
-- `ScanContext` — the four risk-context fields, one row per tenant (CE
-  self-scan path). `ClusterRegistration` carries the same four fields for
-  the EE multi-cluster path.
+- `ScanContext` — the four risk-context fields, one row per tenant
+  (self-scan path). `ClusterRegistration` carries the same four fields for
+  the multi-cluster path.
 - `CVEFeed` / `CVEEntry` — feed registry and parsed entries.
 - `CVEScanResult` / `K8sCVEScanResult` / `RBACScanResult` — persisted scans;
   findings are stored as JSON **including** their `contextual_score`,
@@ -91,10 +91,9 @@ The scanner needs read-only access:
 
 No write verbs anywhere — Kaaval recommends fixes, it does not apply them.
 
-## CE / EE split
+## Licensing
 
-Everything documented here is Community Edition and self-hosted with no
-license. The license gate (`license.py`) reserves fleet management,
-SSO/OIDC, advanced compliance mapping, and custom scoring weights for a
-future Enterprise tier; none of it is required for scanning, scoring, PDF
-export, or CI gating.
+Everything documented here — scanning, scoring, PDF export, CI gating,
+multi-cluster comparison — is Apache-2.0 open source and self-hosted with
+no license gates of any kind. The project targets CNCF vendor-neutrality
+standards; there is no enterprise tier and no reserved feature set.

@@ -249,7 +249,7 @@ export default function CVEPage() {
     };
 
     // Primary v1 action: scan the cluster Kaaval runs in unless a registered
-    // (EE) cluster is selected, in which case scan that one instead.
+    // cluster is selected, in which case scan that one instead.
     const runScan = () => (selectedClusterId ? runClusterScan() : runSelfScan());
 
     const downloadReport = async () => {

@@ -5,7 +5,7 @@ quickstart. This directory is the detail:
 
 | Doc | What it covers |
 |---|---|
-| [architecture.md](architecture.md) | Components, data flow, the pure-function core, DB models, cluster permissions, CE/EE split |
+| [architecture.md](architecture.md) | Components, data flow, the pure-function core, DB models, cluster permissions, licensing |
 | [contextual-risk-score.md](contextual-risk-score.md) | The scoring formula, exact weights, worked examples, how to set the risk context, design rationale |
 | [rbac-rules.md](rbac-rules.md) | Every RBAC rule: triggers, severities, CIS v1.12.0 mappings, suppression logic, expected-finding notes |
 | [api.md](api.md) | REST reference: auth flow, every endpoint, request/response examples |

@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from . import models, database, auth, audit
-from .license import license_gate
 from .cve_service import cve_service as _cve_service
 from .routers import cve, rbac
 
@@ -146,16 +145,11 @@ async def shutdown_event():
     _scheduler.shutdown(wait=False)
 
 
-# ── Health / License ───────────────────────────────────────────────────────────
+# ── Health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 def health_check():
     return {"status": "ok", "service": "Kaaval Control Plane", "version": "1.0.0"}
-
-
-@app.get("/license/status")
-def license_status(current_user=Depends(auth.get_current_active_user)):
-    return license_gate.status()
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
