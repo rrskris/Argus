@@ -214,6 +214,8 @@ def _print_table(result: dict) -> None:
         if refs:
             print(f"           refs: {refs}")
         print()
+
+
 _SEVERITY_TO_SARIF_LEVEL = {
     "CRITICAL": "error",
     "HIGH": "error",
@@ -221,6 +223,12 @@ _SEVERITY_TO_SARIF_LEVEL = {
     "LOW": "note",
     "UNKNOWN": "note",
 }
+
+
+def _humanize_rule_type(rule_type: str) -> str:
+    """Generic rule-level description from rule_type,
+    e.g. 'cluster_admin_binding' -> 'Cluster Admin Binding'."""
+    return rule_type.replace("_", " ").title()
 
 
 def _finding_rows(result: dict) -> list:
@@ -247,7 +255,7 @@ def _print_sarif(result: dict) -> None:
             rules_by_id[row["rule_id"]] = {
                 "id": row["rule_id"],
                 "name": row["rule_id"],
-                "shortDescription": {"text": row["title"]},
+                "shortDescription": {"text": _humanize_rule_type(row["rule_id"])},
                 "helpUri": "https://github.com/rrskris/Argus",
                 "properties": {"tags": ["rbac", "security"]},
             }
@@ -257,8 +265,8 @@ def _print_sarif(result: dict) -> None:
         f = row["raw"]
         binding = f["binding"]
         location_name = binding.get("namespace") or "cluster-scoped"
-        taxa = [
-            {"toolComponent": {"name": r["benchmark"]}, "id": r.get("id") or r["benchmark"]}
+        cis_refs = [
+            {"benchmark": r["benchmark"], "id": r.get("id")}
             for r in row["refs"]
         ]
         sarif_results.append({
@@ -274,8 +282,8 @@ def _print_sarif(result: dict) -> None:
             "properties": {
                 "contextual_score": f.get("contextual_score"),
                 "severity": f.get("severity"),
+                "cis_refs": cis_refs,
             },
-            **({"taxa": taxa} if taxa else {}),
         })
 
     sarif = {
@@ -293,6 +301,7 @@ def _print_sarif(result: dict) -> None:
         }],
     }
     print(json.dumps(sarif, indent=2))
+
 
 def _apply_gate(findings: list, fail_on_score, fail_on_severity) -> int:
     breaches = []
@@ -360,11 +369,11 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     if args.output == "json":
-      print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2))
     elif args.output == "sarif":
-      _print_sarif(result)
+        _print_sarif(result)
     else:
-      _print_table(result)
+        _print_table(result)
 
     return _apply_gate(findings, fail_on_score, fail_on_severity)
 

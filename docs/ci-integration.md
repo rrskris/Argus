@@ -220,8 +220,9 @@ SRE alerting on *new* findings only, and a Helm chart for one-line install.
       --context-file argus.yaml \
       --output sarif > results.sarif
 
-- name: Upload SARIF to GitHub Security tab
+- - name: Upload SARIF to GitHub Security tab
   uses: github/codeql-action/upload-sarif@v3
+  if: always()
   with:
     sarif_file: results.sarif
 \`\`\`
