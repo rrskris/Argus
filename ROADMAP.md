@@ -44,6 +44,19 @@ a pure adapter ([pattern](docs/trivy-grype-integration.md)).
 - [ ] More CIS §5.1 rules (e.g. default-SA token automount) — [#7](https://github.com/kaaval/kaaval/issues/7) **[good first issue]**
 - [ ] Auto-detect data classification / exposure from namespace labels — [#36](https://github.com/kaaval/kaaval/issues/36)
 
+## Milestone v1.4 — Zero-Trust posture
+
+Kaaval today does role-centric dangerous-permission detection; Zero-Trust is
+identity-centric — what each identity can *actually* do across all its bindings,
+and how far a compromise reaches. Anchored to
+[NIST SP 800-207A](https://doi.org/10.6028/NIST.SP.800-207A). Full design:
+[docs/design/zero-trust-rbac.md](docs/design/zero-trust-rbac.md).
+
+- [ ] **Effective Access Graph** — per-identity aggregated permissions + combination escalation paths (the lead build) — [#47](https://github.com/kaaval/kaaval/issues/47) **[help wanted]**
+- [ ] Blast-radius exposure factor on the Contextual Risk Score — [#48](https://github.com/kaaval/kaaval/issues/48) **[help wanted]**
+- [ ] Segmentation-violation rule (namespaced identity reaching cluster scope) — [#49](https://github.com/kaaval/kaaval/issues/49) **[good first issue]**
+- [ ] Usage-based least-privilege via audit-log ingestion (design first) — [#50](https://github.com/kaaval/kaaval/issues/50) **[help wanted]**
+
 ## Milestone v2.0 — the differentiators
 
 - [ ] Cloud-identity cross-reference — tie a ServiceAccount's IRSA / Workload Identity annotation to its real cloud IAM blast radius — [#37](https://github.com/kaaval/kaaval/issues/37) **[help wanted]**
@@ -56,7 +69,10 @@ Kaaval is built toward a **CNCF Sandbox application**, deliberately:
 
 1. **Standards in both directions** — we emit the ecosystem's formats
    (PolicyReport, SARIF) and ingest them (Trivy, Grype, Kyverno PolicyReports)
-   rather than inventing our own. v1.2/v1.3 above are that story.
+   rather than inventing our own. v1.2/v1.3 above are that story. The
+   Zero-Trust posture work (v1.4) is anchored to
+   [NIST SP 800-207A](https://doi.org/10.6028/NIST.SP.800-207A) and the
+   Kubernetes RBAC Good Practices — recognized frameworks, not invented ones.
 2. **Upstream first** — where a gap belongs in someone else's project, we fix
    it there ([contributions ledger](docs/upstream-contributions.md)).
 3. **Governance and supply chain** already follow CNCF norms: vendor-neutral
