@@ -1,0 +1,98 @@
+name: Smoke test published images
+
+# Repo CI tests the source. This tests what users actually pull: the published
+# ghcr.io images, unauthenticated (which also proves they're public), on a clean
+# runner. Runs daily, on demand, and right after every publish — so drift in a
+# base image, a registry, or a half-failed publish is caught by a machine, not
+# by a user who hits it and quietly leaves.
+#
+# The image tags (:edge) are referenced by tag ON PURPOSE, not pinned — the
+# whole point is to test the live, mutable artifact as a user receives it.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Publish images"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+# Skip only when triggered by a FAILED publish run (nothing new to test);
+# always run for schedule / manual dispatch.
+jobs:
+  cli-scan:
+    name: CLI image — RBAC scan + gating
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Scan the bundled RBAC fixtures from the published image
+        run: |
+          docker run --rm -v "$PWD/hack/dev:/scan" ghcr.io/kaaval/kaaval:edge \
+            scan rbac --manifests /scan/rbac-fixtures.yaml --output table | tee scan.txt
+          grep -q "Kaaval RBAC scan" scan.txt
+          grep -q "CRITICAL=1" scan.txt
+
+      - name: Contextual-score gating exits non-zero on a breach
+        run: |
+          set +e
+          docker run --rm -v "$PWD/hack/dev:/scan" ghcr.io/kaaval/kaaval:edge \
+            scan rbac --manifests /scan/rbac-fixtures.yaml --fail-on-severity HIGH
+          code=$?
+          set -e
+          [ "$code" -eq 1 ] || { echo "expected exit 1 on gated scan, got $code"; exit 1; }
+
+  dashboard:
+    name: Dashboard image — serves Kaaval login
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Boot the dashboard image and probe /login
+        run: |
+          docker run -d --name dash -p 3000:3000 ghcr.io/kaaval/kaaval-dashboard:edge
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/login >/dev/null 2>&1 && break
+            sleep 2
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/login)
+          if [ "$code" != "200" ]; then echo "login returned $code"; docker logs dash; exit 1; fi
+          curl -s http://127.0.0.1:3000/login | grep -qi kaaval \
+            || { echo "Kaaval branding missing from login page"; exit 1; }
+
+  api-serve:
+    name: Control-plane image — boots + health
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kaaval
+          POSTGRES_PASSWORD: smoke
+          POSTGRES_DB: kaaval_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kaaval"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Boot the API image against Postgres and probe health
+        run: |
+          docker run -d --name api --network host \
+            -e DATABASE_URL="postgresql://kaaval:smoke@localhost:5432/kaaval_db" \
+            -e KAAVAL_SECRET_KEY=smoke \
+            -e KAAVAL_REFRESH_SECRET_KEY=smoke \
+            -e KAAVAL_ADMIN_PASSWORD=smoke-admin \
+            ghcr.io/kaaval/kaaval:edge
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/ >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -s http://127.0.0.1:8000/ | grep -q '"status":"ok"' \
+            || { echo "health check failed"; docker logs api; exit 1; }

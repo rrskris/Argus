@@ -1,6 +1,7 @@
 # Kaaval
 
 [![CI](https://github.com/kaaval/kaaval/actions/workflows/ci.yml/badge.svg)](https://github.com/kaaval/kaaval/actions/workflows/ci.yml)
+[![Published images](https://github.com/kaaval/kaaval/actions/workflows/smoke-published.yml/badge.svg)](https://github.com/kaaval/kaaval/actions/workflows/smoke-published.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/kaaval/kaaval/badge)](https://scorecard.dev/viewer/?uri=github.com/kaaval/kaaval)
 [![Release](https://img.shields.io/github/v/release/kaaval/kaaval?include_prereleases)](https://github.com/kaaval/kaaval/releases)
 [![License](https://img.shields.io/github/license/kaaval/kaaval)](LICENSE)
