@@ -11,6 +11,7 @@
 #   9. secret-reader (ns)  → broad_secrets_access (namespaced Role)
 #  10. sneaky-masters      → cluster_admin_binding (user binding to system:masters)
 #  11. safe-viewer         → must produce ZERO findings
+#  12. cross-ns-reader     → segmentation_violation (namespaced SA bound cluster-wide)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -246,3 +247,32 @@ subjects:
   - kind: ServiceAccount
     name: viewer-svc
     namespace: default
+---
+# 12. cross-ns-reader  → segmentation_violation
+# A namespaced ServiceAccount (monitoring/prometheus-sa) bound cluster-wide via
+# a ClusterRoleBinding. Prometheus and similar agents legitimately need
+# cluster-wide read access; this fixture exists so the live testbed confirms
+# the rule fires. Teams should document such SAs as expected cluster-agent SAs
+# (see docs/rbac-rules.md) or replace the ClusterRoleBinding with per-namespace
+# RoleBindings when cluster-wide reach is not required.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cross-ns-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cross-ns-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cross-ns-reader
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-sa
+    namespace: monitoring

@@ -55,14 +55,14 @@ _CIS_REFS = {
          "title": "Overly permissive RBAC configurations"},
     ],
     # Segmentation violation: namespaced identity reaching cluster/cross-namespace scope.
-    # CIS 5.1.5 (default SA) and 5.1.6 (SA token automount) are adjacent but the
-    # closest direct controls are 5.1.5 and the RBAC Good Practices doc on
-    # namespace isolation. NIST 800-207A micro-segmentation is the primary reference.
+    # There is no CIS 5.1 control that directly covers segmentation — CIS 5.1.5 is
+    # about default SA token automount, not namespace isolation.  NIST SP 800-207A
+    # is the right primary reference (Zero Trust micro-segmentation); it uses no
+    # MS-n control-numbering scheme, so id is null.  The Kubernetes RBAC Good
+    # Practices doc has an explicit namespace-isolation section.
     "segmentation_violation": [
-        {"benchmark": CIS_BENCHMARK, "id": "5.1.5",
-         "title": "Ensure that default service accounts are not bound to active service account roles"},
-        {"benchmark": "NIST SP 800-207A", "id": "MS-3",
-         "title": "Enforce namespace isolation — identities should not cross namespace boundaries"},
+        {"benchmark": "NIST SP 800-207A", "id": None,
+         "title": "Zero Trust micro-segmentation — workload identities must not cross namespace boundaries"},
         {"benchmark": "Kubernetes RBAC Good Practices", "id": None,
          "title": f"Namespace isolation — {_RBAC_GOOD_PRACTICES_URL}"},
     ],
