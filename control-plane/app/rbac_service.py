@@ -144,6 +144,59 @@ def _grants_pv_creation(rule: dict) -> bool:
     )
 
 
+# ── Segmentation-violation helpers (issue #49) ───────────────────────────────
+
+def _subject_namespace(subject: dict) -> Optional[str]:
+    """Return the namespace of a ServiceAccount subject, or None for other kinds."""
+    if subject.get("kind") == "ServiceAccount":
+        return subject.get("namespace") or None
+    return None
+
+
+def _is_segmentation_violation(binding: dict, role_kind: str) -> Optional[str]:
+    """
+    Return a human-readable description if this binding breaks micro-segmentation,
+    otherwise return None.
+
+    Two cases (NIST 800-207A, CIS 5.1.5/5.1.6):
+    1. A namespaced ServiceAccount reaches cluster scope via ClusterRoleBinding.
+       Any ClusterRoleBinding whose subject is a namespaced ServiceAccount grants
+       that account power over the entire cluster, not just its home namespace.
+    2. A RoleBinding grants access into a *different* namespace (cross-namespace
+       reach) — when roleRef points at a ClusterRole and the binding subject's
+       namespace differs from the binding's own namespace.
+    """
+    binding_kind = binding.get("binding_kind")
+    binding_ns = binding.get("namespace")  # None for ClusterRoleBinding
+    subjects = binding.get("subjects") or []
+
+    # Case 1: ClusterRoleBinding with a namespaced ServiceAccount subject.
+    if binding_kind == "ClusterRoleBinding":
+        for subject in subjects:
+            ns = _subject_namespace(subject)
+            if ns is not None:
+                return (
+                    f"ServiceAccount '{subject.get('name')}' in namespace '{ns}' "
+                    f"is bound at cluster scope via ClusterRoleBinding "
+                    f"'{binding.get('name')}' — it reaches every namespace."
+                )
+
+    # Case 2: RoleBinding in namespace A grants a ClusterRole to a subject whose
+    # home namespace is B (cross-namespace reach). Only meaningful when the
+    # bound role is a ClusterRole (a Role can't grant cross-namespace access).
+    if binding_kind == "RoleBinding" and role_kind == "ClusterRole" and binding_ns:
+        for subject in subjects:
+            ns = _subject_namespace(subject)
+            if ns is not None and ns != binding_ns:
+                return (
+                    f"ServiceAccount '{subject.get('name')}' in namespace '{ns}' "
+                    f"is granted access in namespace '{binding_ns}' via RoleBinding "
+                    f"'{binding.get('name')}' — cross-namespace reach breaks micro-segmentation."
+                )
+
+    return None
+
+
 def _is_cluster_admin_equivalent(role_name: str, rules: list) -> bool:
     if role_name == "cluster-admin":
         return True
@@ -311,6 +364,14 @@ def evaluate_rbac_findings(graph: dict, context: dict) -> list[dict]:
                 "rule_type": "cluster_admin_binding",
                 "severity": "CRITICAL",
                 "detail": f"Grants cluster-admin-equivalent access to {broad_identity}.",
+            })
+
+        seg_detail = _is_segmentation_violation(binding, role_kind)
+        if seg_detail:
+            risks.append({
+                "rule_type": "segmentation_violation",
+                "severity": "HIGH",
+                "detail": seg_detail,
             })
 
         for risk in risks:

@@ -293,7 +293,11 @@ def test_pv_creation_flagged():
     assert any(f["rule_type"] == "pv_creation" for f in findings)
 
 
-def test_readonly_narrow_role_produces_no_findings():
+def test_readonly_narrow_role_produces_no_rbac_risk_findings():
+    """A narrow read-only ClusterRole produces no content-risk findings.
+    The _single_rule_graph helper binds via ClusterRoleBinding to a namespaced SA,
+    which correctly fires segmentation_violation — but the role itself carries
+    no wildcard, secrets, exec, escalation, or other RBAC risk flags."""
     graph = _single_rule_graph("viewer", {
         "verbs": ["get", "list", "watch"], "resources": ["configmaps", "services"],
         "api_groups": [""], "resource_names": [],
@@ -301,7 +305,10 @@ def test_readonly_narrow_role_produces_no_findings():
 
     findings = evaluate_rbac_findings(graph, _CONTEXT)
 
-    assert findings == []
+    # Segmentation violation fires (correct — namespaced SA bound cluster-wide).
+    # No other RBAC content risk should appear.
+    non_seg = [f for f in findings if f["rule_type"] != "segmentation_violation"]
+    assert non_seg == []
 
 
 def test_user_created_binding_to_system_masters_is_flagged():
@@ -353,3 +360,157 @@ def test_no_matching_role_for_binding_is_skipped_without_error():
     findings = evaluate_rbac_findings(graph, _CONTEXT)
 
     assert findings == []
+
+
+# ── Segmentation-violation rule (issue #49) ───────────────────────────────────
+
+def _role_binding(name, role_name, subjects, namespace="team-a"):
+    return {
+        "name": name,
+        "kind": "RoleBinding",
+        "namespace": namespace,
+        "roleRef": {"kind": "ClusterRole", "name": role_name},
+        "subjects": subjects,
+    }
+
+
+def test_namespaced_sa_cluster_role_binding_is_segmentation_violation():
+    """A ServiceAccount from namespace 'team-a' bound cluster-wide via
+    ClusterRoleBinding violates micro-segmentation."""
+    graph = {
+        "roles": [],
+        "role_bindings": [],
+        "cluster_roles": [_cluster_role("pod-reader", [
+            {"verbs": ["get", "list", "watch"], "resources": ["pods"],
+             "api_groups": [""], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [_cluster_role_binding(
+            "team-a-cluster-reader", "pod-reader",
+            [{"kind": "ServiceAccount", "name": "monitor", "namespace": "team-a"}],
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    seg = [f for f in findings if f["rule_type"] == "segmentation_violation"]
+    assert len(seg) == 1
+    assert seg[0]["severity"] == "HIGH"
+    assert "team-a" in seg[0]["description"]
+    assert "cluster scope" in seg[0]["description"]
+
+
+def test_cluster_sa_cluster_role_binding_is_not_segmentation_violation():
+    """A ServiceAccount with no namespace (non-namespaced subject) bound
+    cluster-wide is normal — only namespaced SAs trigger the rule."""
+    graph = {
+        "roles": [],
+        "role_bindings": [],
+        "cluster_roles": [_cluster_role("pod-reader", [
+            {"verbs": ["get"], "resources": ["pods"],
+             "api_groups": [""], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [_cluster_role_binding(
+            "user-reader", "pod-reader",
+            [{"kind": "User", "name": "alice", "namespace": None}],
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert not any(f["rule_type"] == "segmentation_violation" for f in findings)
+
+
+def test_cross_namespace_role_binding_is_segmentation_violation():
+    """A RoleBinding in namespace 'team-b' that grants access to a ServiceAccount
+    from 'team-a' is cross-namespace reach."""
+    graph = {
+        "roles": [],
+        "cluster_roles": [_cluster_role("configmap-reader", [
+            {"verbs": ["get", "list"], "resources": ["configmaps"],
+             "api_groups": [""], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [],
+        "role_bindings": [_role_binding(
+            "cross-ns-binding", "configmap-reader",
+            [{"kind": "ServiceAccount", "name": "reader", "namespace": "team-a"}],
+            namespace="team-b",
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    seg = [f for f in findings if f["rule_type"] == "segmentation_violation"]
+    assert len(seg) == 1
+    assert seg[0]["severity"] == "HIGH"
+    assert "team-a" in seg[0]["description"]
+    assert "team-b" in seg[0]["description"]
+
+
+def test_same_namespace_role_binding_is_not_segmentation_violation():
+    """A RoleBinding in 'team-a' granting a ServiceAccount from 'team-a'
+    is contained — no cross-namespace reach."""
+    graph = {
+        "roles": [],
+        "cluster_roles": [_cluster_role("configmap-reader", [
+            {"verbs": ["get", "list"], "resources": ["configmaps"],
+             "api_groups": [""], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [],
+        "role_bindings": [_role_binding(
+            "same-ns-binding", "configmap-reader",
+            [{"kind": "ServiceAccount", "name": "reader", "namespace": "team-a"}],
+            namespace="team-a",
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    assert not any(f["rule_type"] == "segmentation_violation" for f in findings)
+
+
+def test_segmentation_violation_carries_remediation():
+    """segmentation_violation findings must carry a remediation block with
+    action, why_it_matters, and benchmark_refs."""
+    graph = {
+        "roles": [],
+        "role_bindings": [],
+        "cluster_roles": [_cluster_role("pod-reader", [
+            {"verbs": ["get", "list"], "resources": ["pods"],
+             "api_groups": [""], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [_cluster_role_binding(
+            "team-a-cluster-reader", "pod-reader",
+            [{"kind": "ServiceAccount", "name": "monitor", "namespace": "team-a"}],
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    seg = [f for f in findings if f["rule_type"] == "segmentation_violation"]
+    assert seg
+    remediation = seg[0]["remediation"]
+    assert remediation["action"]
+    assert remediation["why_it_matters"]
+    assert remediation["benchmark_refs"]
+
+
+def test_segmentation_violation_stacks_with_other_risks():
+    """A namespaced SA bound cluster-wide via a wildcard ClusterRole should
+    produce BOTH wildcard_permissions AND segmentation_violation findings."""
+    graph = {
+        "roles": [],
+        "role_bindings": [],
+        "cluster_roles": [_cluster_role("wide-open", [
+            {"verbs": ["*"], "resources": ["*"], "api_groups": ["*"], "resource_names": []},
+        ])],
+        "cluster_role_bindings": [_cluster_role_binding(
+            "team-a-wide-open", "wide-open",
+            [{"kind": "ServiceAccount", "name": "app", "namespace": "team-a"}],
+        )],
+    }
+
+    findings = evaluate_rbac_findings(graph, _CONTEXT)
+
+    rule_types = {f["rule_type"] for f in findings}
+    assert "wildcard_permissions" in rule_types
+    assert "segmentation_violation" in rule_types

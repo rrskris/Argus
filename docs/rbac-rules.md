@@ -26,6 +26,7 @@ classification × compliance scope × exposure). Benchmark citations are to the
 | `webhook_config_access` | write verbs on mutating/validating webhook configurations (ClusterRole only) | HIGH | CIS 5.1.12 |
 | `pv_creation` | `persistentvolumes` + create (ClusterRole only) | HIGH | CIS 5.1.9 |
 | `cluster_admin_binding` | cluster-admin (or wildcard-equivalent role) bound to a **broad identity** | CRITICAL | CIS 5.1.1 (+5.1.7 when the subject is `system:masters`) |
+| `segmentation_violation` | a namespaced `ServiceAccount` bound cluster-wide via `ClusterRoleBinding`, or a `RoleBinding` granting a SA from a different namespace (cross-namespace reach) | HIGH | NIST SP 800-207A (Zero Trust micro-segmentation), Kubernetes RBAC Good Practices (no CIS 5.1 control covers namespace isolation directly) |
 
 Notes on the less obvious ones:
 
@@ -56,6 +57,17 @@ Notes on the less obvious ones:
   (no token at all), `system:masters` (bypasses RBAC entirely).
   "Wildcard-equivalent" means a role with `*` verbs+resources+apiGroups, not
   just the literal `cluster-admin` name.
+- **`segmentation_violation`** — fires when a namespaced `ServiceAccount` is
+  lifted to cluster scope via a `ClusterRoleBinding`, or when a `RoleBinding`
+  grants a SA from a different namespace. Both patterns break the Zero Trust
+  micro-segmentation tenet: workload identities should not cross the namespace
+  boundary. Note that many legitimate cluster agents (Prometheus, ingress
+  controllers, cert-manager, Flux, Argo CD) bind a namespaced SA cluster-wide
+  by design — this is an **expected cluster-agent SA** pattern. When you confirm
+  a finding is intentional, document it in your access-review log and let the
+  Contextual Risk Score (environment + data classification) determine urgency
+  rather than suppressing the rule. The base severity of HIGH exists to surface
+  the pattern for review, not to mandate immediate remediation.
 
 ## Suppression rules (noise control, and its limits)
 

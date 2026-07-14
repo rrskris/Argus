@@ -79,9 +79,9 @@ roleRef:
   kind: ClusterRole
   name: safe-viewer
 subjects:
-  - kind: ServiceAccount
+  - kind: User
     name: viewer
-    namespace: default
+    apiGroup: rbac.authorization.k8s.io
 """
 
 
