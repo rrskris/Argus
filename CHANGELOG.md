@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no arguments (or `serve`) runs the API server.
 
 ### Added
+- **`--version` flag and JUnit XML output** (`--output junit`): version is
+  single-sourced from `app.__version__` (fixing the stale hardcoded API version),
+  and findings emit as JUnit testcases for GitLab/Jenkins test panes — a clean
+  scan emits one passing case instead of an empty suite. Contributed by
+  [@donkk11](https://github.com/donkk11) (#81).
 - **SARIF `security-severity`**: SARIF rules carry a `security-severity` scaled from
   the per-rule maximum Contextual Risk Score (capped by `MAX_CONTEXTUAL_SCORE`,
   derived from the scoring weight maxima), so GitHub's Security-tab ordering mirrors

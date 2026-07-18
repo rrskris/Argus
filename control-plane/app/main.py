@@ -12,7 +12,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from . import models, database, auth, audit
+from . import __version__, models, database, auth, audit
 from .cve_service import cve_service as _cve_service
 from .health import run_deep_checks
 from .routers import cve, rbac
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Kaaval Control Plane", version="1.0.0")
+app = FastAPI(title="Kaaval Control Plane", version=__version__)
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 ALLOWED_ORIGINS = os.getenv(
@@ -173,7 +173,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "service": "Kaaval Control Plane", "version": "1.0.0"}
+    return {"status": "ok", "service": "Kaaval Control Plane", "version": __version__}
 
 
 @app.get("/health")

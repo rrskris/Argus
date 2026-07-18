@@ -333,3 +333,47 @@ def test_policyreport_output_matches_wgpolicy_schema(risky_dir, capsys):
                 assert ref["namespace"] == d["metadata"]["namespace"]
 
     assert code == 0  # output format must not affect gate semantics
+
+
+def test_version_flag_prints_single_sourced_version(capsys):
+    from app import __version__
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.strip() == f"kaaval {__version__}"
+
+
+def test_junit_output_is_valid_shape(risky_dir, capsys):
+    import xml.etree.ElementTree as ET
+
+    code = main(["scan", "rbac", "--manifests", str(risky_dir), "--output", "junit"])
+    assert code == 0  # output format must not affect gate semantics
+
+    suite = ET.fromstring(capsys.readouterr().out)
+    assert suite.tag == "testsuite"
+    cases = suite.findall("testcase")
+    assert cases
+    assert suite.get("tests") == str(len(cases))
+    assert suite.get("failures") == str(len(cases))
+    for case in cases:
+        assert case.get("classname", "").startswith("kaaval.rbac.")
+        failure = case.find("failure")
+        assert failure is not None
+        assert failure.get("message")
+        assert failure.text  # remediation + binding location body
+
+
+def test_junit_clean_scan_emits_single_passing_case(tmp_path, capsys):
+    import xml.etree.ElementTree as ET
+
+    clean = tmp_path / "clean.yaml"
+    clean.write_text("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: clean\n")
+
+    code = main(["scan", "rbac", "--manifests", str(clean), "--output", "junit"])
+    assert code == 0
+
+    suite = ET.fromstring(capsys.readouterr().out)
+    assert suite.get("tests") == "1"
+    assert suite.get("failures") == "0"
+    assert suite.find("testcase").find("failure") is None

@@ -38,10 +38,12 @@ import argparse
 import json
 import os
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
 
+from . import __version__
 from .health import DeepCheckResult, run_deep_checks
 from .rbac_service import evaluate_rbac_findings
 from .scoring import (
@@ -350,6 +352,47 @@ def _print_sarif(result: dict) -> None:
     print(json.dumps(sarif, indent=2))
 
 
+def _print_junit(result: dict) -> None:
+    """JUnit XML — so GitLab CI and Jenkins render Kaaval findings in their
+    native test-report panes. One testcase per finding (classname=rule_id),
+    each reported as a <failure> so it surfaces the same way a failed test
+    would; a clean scan emits a single passing testcase rather than an empty
+    (and easily mistaken-for-broken) suite."""
+    rows = _finding_rows(result)
+
+    testsuite = ET.Element("testsuite", {
+        "name": "kaaval.rbac",
+        "tests": str(len(rows) or 1),
+        "failures": str(len(rows)),
+        "errors": "0",
+    })
+
+    if not rows:
+        ET.SubElement(testsuite, "testcase", {
+            "classname": "kaaval.rbac",
+            "name": "no RBAC misconfigurations found",
+        })
+    else:
+        for row in rows:
+            binding = row["raw"]["binding"]
+            location = binding.get("namespace") or "cluster-scoped"
+            testcase = ET.SubElement(testsuite, "testcase", {
+                "classname": f"kaaval.rbac.{row['rule_id']}",
+                "name": row["title"],
+            })
+            failure = ET.SubElement(testcase, "failure", {
+                "message": row["title"],
+                "type": row["raw"].get("severity", "UNKNOWN"),
+            })
+            failure.text = (
+                f"{row['message']}\n"
+                f"via {binding['kind']} {binding['name']} ({location})"
+            )
+
+    ET.indent(ET.ElementTree(testsuite), space="  ")
+    print(ET.tostring(testsuite, encoding="unicode", xml_declaration=True))
+
+
 # PolicyReport (wgpolicyk8s.io/v1alpha2) — the Kubernetes Policy WG standard
 # consumed by policy-reporter, Kyverno, Falco, and Trivy-operator. Kaaval only
 # *emits* the documents; applying them to a cluster stays the caller's choice,
@@ -491,6 +534,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="kaaval", description="Kaaval headless scanner for CI/CD pipelines."
     )
+    parser.add_argument(
+        "--version", action="version", version=f"kaaval {__version__}"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Preflight Postgres, CVE feeds, and Kubernetes credentials")
     scan = sub.add_parser("scan", help="Run a scan")
@@ -503,7 +549,7 @@ def main(argv: list[str] | None = None) -> int:
     rbac.add_argument("--context-file", help="kaaval.yaml risk context (risk context as code)")
     rbac.add_argument("--fail-on-score", type=float, help="Exit 1 if any finding scores >= this")
     rbac.add_argument("--fail-on-severity", help="Exit 1 if any finding is at/above this severity")
-    rbac.add_argument("--output", choices=["table", "json", "sarif", "policyreport"], default="table")
+    rbac.add_argument("--output", choices=["table", "json", "sarif", "policyreport", "junit"], default="table")
 
     args = parser.parse_args(argv)
 
@@ -538,6 +584,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_sarif(result)
     elif args.output == "policyreport":
         _print_policyreport(result)
+    elif args.output == "junit":
+        _print_junit(result)
     else:
         _print_table(result)
 
