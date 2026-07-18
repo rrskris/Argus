@@ -6,6 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/kaaval/kaaval?include_prereleases)](https://github.com/kaaval/kaaval/releases)
 [![License](https://img.shields.io/github/license/kaaval/kaaval)](LICENSE)
 [![Good first issues](https://img.shields.io/github/issues/kaaval/kaaval/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/kaaval/kaaval/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+[![Invigil doctrine grade](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/invigil/invigil/main/badges/kaaval.json)](https://github.com/invigil/invigil)
 
 **A self-hosted Kubernetes security scanner that tells you what a finding actually means for *your* cluster — not just a list of IDs to look up yourself.**
 
