@@ -43,7 +43,17 @@ def test_login_and_self_scan():
         assert resp.status_code == 200
         assert "total_cves" in resp.json()
 
-        # Risk context: defaults on first access, then updatable
+        # Risk context: defaults on first access, then updatable.
+        # Drop any persisted context first — a previous run's PUT below would
+        # otherwise leak into this assertion on a reused local database.
+        from app import database as _database, models as _models
+        _db = _database.SessionLocal()
+        try:
+            _db.query(_models.ScanContext).delete()
+            _db.commit()
+        finally:
+            _db.close()
+
         resp = client.get("/cve/context", headers=headers)
         assert resp.status_code == 200, resp.text
         context = resp.json()

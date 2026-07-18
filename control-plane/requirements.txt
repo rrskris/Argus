@@ -13,3 +13,4 @@ reportlab==5.0.0
 cryptography==49.0.0
 pyyaml==6.0.3
 pytest==9.1.1
+pytest-cov==7.1.0
