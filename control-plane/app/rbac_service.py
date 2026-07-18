@@ -19,7 +19,12 @@ from .scoring import compute_contextual_score
 
 logger = logging.getLogger(__name__)
 
-_EMPTY_GRAPH = {"roles": [], "cluster_roles": [], "role_bindings": [], "cluster_role_bindings": []}
+_EMPTY_GRAPH: dict[str, list[dict]] = {
+    "roles": [],
+    "cluster_roles": [],
+    "role_bindings": [],
+    "cluster_role_bindings": [],
+}
 
 # Identities broad enough that granting them anything risky matters cluster-wide.
 # system:masters is here (not in the builtin allowlist) because membership
@@ -454,3 +459,45 @@ def get_latest_rbac_scan(db: Session) -> Optional[dict]:
     if not scan:
         return None
     return _format_scan_result(scan)
+
+
+def _finding_key(finding: dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    role = finding.get("role") or {}
+    binding = finding.get("binding") or {}
+    return finding.get("rule_type"), role.get("name"), binding.get("name")
+
+
+def diff_latest_scans(db: Session) -> dict:
+    """Compare findings from the two most recent persisted RBAC scans."""
+    scans = (
+        db.query(RBACScanResult)
+        .order_by(RBACScanResult.scanned_at.desc())
+        .limit(2)
+        .all()
+    )
+    if len(scans) < 2:
+        return {"added": [], "resolved": [], "unchanged_count": 0}
+
+    latest, previous = scans
+    latest_findings = latest.findings if isinstance(latest.findings, list) else []
+    previous_findings = previous.findings if isinstance(previous.findings, list) else []
+    latest_by_key = {
+        _finding_key(finding): finding for finding in latest_findings
+    }
+    previous_by_key = {
+        _finding_key(finding): finding for finding in previous_findings
+    }
+
+    return {
+        "added": [
+            finding
+            for key, finding in latest_by_key.items()
+            if key not in previous_by_key
+        ],
+        "resolved": [
+            finding
+            for key, finding in previous_by_key.items()
+            if key not in latest_by_key
+        ],
+        "unchanged_count": len(latest_by_key.keys() & previous_by_key.keys()),
+    }

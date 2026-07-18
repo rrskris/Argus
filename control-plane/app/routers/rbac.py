@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..auth import get_current_active_user
-from ..rbac_service import scan_rbac, get_latest_rbac_scan
+from ..rbac_service import diff_latest_scans, get_latest_rbac_scan, scan_rbac
 from ..report_service import build_rbac_scan_pdf
 
 router = APIRouter(prefix="/rbac", tags=["RBAC"])
@@ -35,6 +35,15 @@ def get_latest_scan(
     if not result:
         return {"message": "No scan results yet. POST /rbac/scan to run the first scan."}
     return result
+
+
+@router.get("/scan/diff")
+def get_scan_diff(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_active_user),
+):
+    """Return findings added, resolved, or unchanged since the previous scan."""
+    return diff_latest_scans(db)
 
 
 @router.get("/scan/latest/report.pdf")
