@@ -1,15 +1,19 @@
-# (project name)
+# Kaaval
 
-> One-paragraph summary: what this is, who it serves, and the one command that
-> proves it works. Agents read this file first — keep it under 10 KB.
+> A self-hosted Kubernetes security scanner that tracks Roles, ClusterRoles, and bindings against CIS Kubernetes Benchmark controls, calculating contextual risk and presenting clear remediation actions.
 
 ## Quickstart
 
 ```bash
-# the install + hello-world commands, exactly as a cold-start reader would run them
+git clone https://github.com/kaaval/kaaval.git
+cd kaaval
+make setup-dev
+make scan
 ```
 
 ## Key files
 
-- [README](README.md) — landing page
-- (link the API/CLI reference and the config schema)
+- [README](README.md) — Main landing page.
+- [docs/contextual-risk-score.md](docs/contextual-risk-score.md) — Explanation of the contextual risk calculation formula.
+- [docs/rbac-rules.md](docs/rbac-rules.md) — Full catalog of RBAC security scanner checks.
+- [docs/ci-integration.md](docs/ci-integration.md) — Recipes for GitLab, GitHub Actions, Jenkins, and Argo CD.
