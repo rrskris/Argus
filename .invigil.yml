@@ -1,0 +1,4 @@
+version: 1
+
+project:
+  name: kaaval # badge + report display name (default would be the checkout dir)
