@@ -1,0 +1,128 @@
+# Default values for kaaval Helm chart.
+# Every value that maps to an env var is commented with the .env.example key.
+
+# Global settings
+global:
+  imagePullSecrets: []
+
+# PostgreSQL (bitnami/postgresql subchart)
+# Maps to: POSTGRES_PASSWORD, DATABASE_URL
+postgresql:
+  enabled: true
+  auth:
+    database: kaaval_db
+    username: kaaval
+    password: ""           # POSTGRES_PASSWORD (REQUIRED in production)
+    existingSecret: ""
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+# Control Plane (FastAPI)
+# Maps to: KAAVAL_SECRET_KEY, KAAVAL_REFRESH_SECRET_KEY, KAAVAL_ADMIN_PASSWORD,
+#          FRONTEND_URL, ALLOWED_ORIGINS, DATABASE_URL (derived from postgresql)
+controlPlane:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/kaaval/control-plane
+    pullPolicy: IfNotPresent
+    tag: ""
+  imagePullSecrets: []
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources: {}
+  env: {}          # safe to merge into templates; empty = no extra ConfigMap
+  envFrom: []      # #96 will wire the Secret here
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+# Dashboard (Next.js)
+# Maps to: NEXT_PUBLIC_API_URL
+dashboard:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/kaaval/dashboard
+    pullPolicy: IfNotPresent
+    tag: ""
+  imagePullSecrets: []
+  service:
+    type: ClusterIP
+    port: 3000
+  resources: {}
+  env: {}          # empty map, not null
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+# Secrets injected into controlPlane pods
+# Generate with: openssl rand -hex 32
+# Maps to: KAAVAL_SECRET_KEY, KAAVAL_REFRESH_SECRET_KEY, KAAVAL_ADMIN_PASSWORD
+secrets:
+  adminPassword: ""
+  secretKey: ""
+  refreshSecretKey: ""
+
+# Ingress
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: kaaval.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ServiceAccount / RBAC
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+# NetworkPolicy
+networkPolicy:
+  enabled: false
+
+# PodDisruptionBudget - DISABLED by default to avoid deadlock with replicaCount=1
+# When enabling with replicaCount=1, set minAvailable: 0 or use replicaCount >= 2
+pdb:
+  enabled: false
+  minAvailable: 0
+
+# ServiceMonitor for Prometheus
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Tests
+tests:
+  enabled: true

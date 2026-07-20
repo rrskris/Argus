@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kaaval.controlPlane.fullname" . }}
+  labels:
+{{ include "kaaval.controlPlane.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.controlPlane.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "kaaval.controlPlane.selectorLabels" . | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "kaaval.controlPlane.selectorLabels" . | indent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/control-plane-secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.controlPlane.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kaaval.controlPlane.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: control-plane
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlane.service.targetPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.controlPlane.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.controlPlane.livenessProbe.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.controlPlane.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.controlPlane.readinessProbe.periodSeconds }}
+          envFrom:
+            - secretRef:
+                name: {{ include "kaaval.controlPlane.fullname" . }}-secrets
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kaaval.controlPlane.fullname" . }}-secrets
+                  key: database-url
+            - name: KAAVAL_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kaaval.controlPlane.fullname" . }}-secrets
+                  key: secret-key
+            - name: KAAVAL_REFRESH_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kaaval.controlPlane.fullname" . }}-secrets
+                  key: refresh-secret-key
+            - name: KAAVAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kaaval.controlPlane.fullname" . }}-secrets
+                  key: admin-password
+          {{- with .Values.controlPlane.env }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+{{ toYaml .Values.controlPlane.resources | indent 12 }}
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}

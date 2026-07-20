@@ -1,0 +1,26 @@
+apiVersion: v2
+name: kaaval
+description: Self-hosted Kubernetes security scanner that ranks every CVE and RBAC finding by a Contextual Risk Score tied to your cluster
+type: application
+version: 1.1.0
+appVersion: "1.1.0"
+home: https://github.com/kaaval/kaaval
+sources:
+  - https://github.com/kaaval/kaaval
+maintainers:
+  - name: girosole60
+    email: girosole60@users.noreply.github.com
+keywords:
+  - kubernetes
+  - security
+  - cve
+  - rbac
+  - scanner
+  - zero-trust
+dependencies:
+  - name: postgresql
+    version: "15.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+    tags:
+      - database

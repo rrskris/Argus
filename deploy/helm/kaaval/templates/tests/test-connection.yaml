@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "kaaval.fullname" . }}-test-connection"
+  labels:
+    helm.sh/chart: {{ include "kaaval.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox:1.36
+      command: ["wget"]
+      args: ["{{ include "kaaval.controlPlane.fullname" . }}:{{ .Values.controlPlane.service.port }}/health"]
+  restartPolicy: Never
