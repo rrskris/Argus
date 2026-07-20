@@ -167,6 +167,25 @@ class K8sClient:
             cluster_roles = self.rbac_v1.list_cluster_role().items
             role_bindings = self.rbac_v1.list_role_binding_for_all_namespaces().items
             cluster_role_bindings = self.rbac_v1.list_cluster_role_binding().items
+
+            # Token-automount rule inputs (CIS 5.1.6). Fetched separately so a
+            # scanner whose RBAC role lacks pods/serviceaccounts list permission
+            # still gets the binding-based rules instead of a failed scan.
+            service_accounts, pods = [], []
+            try:
+                service_accounts = [{
+                    "name": s.metadata.name, "namespace": s.metadata.namespace,
+                    "kind": "ServiceAccount",
+                    "automountServiceAccountToken": s.automount_service_account_token,
+                } for s in self.core_v1.list_service_account_for_all_namespaces().items]
+                pods = [{
+                    "name": p.metadata.name, "namespace": p.metadata.namespace, "kind": "Pod",
+                    "service_account_name": p.spec.service_account_name,
+                    "automountServiceAccountToken": p.spec.automount_service_account_token,
+                } for p in self.core_v1.list_pod_for_all_namespaces().items]
+            except ApiException as e:
+                logger.warning(f"token-automount inputs unavailable (serviceaccounts/pods list): {e}")
+
             
             def _rules(rules):
                 return [{
@@ -197,7 +216,9 @@ class K8sClient:
                     "kind": "ClusterRoleBinding",
                     "roleRef": crb.role_ref.to_dict(),
                     "subjects": [s.to_dict() for s in (crb.subjects or [])]
-                } for crb in cluster_role_bindings]
+                } for crb in cluster_role_bindings],
+                "service_accounts": service_accounts,
+                "pods": pods
             }
         except ApiException as e:
             logger.error(f"Error fetching RBAC data: {e}")

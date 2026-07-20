@@ -514,3 +514,106 @@ def test_segmentation_violation_stacks_with_other_risks():
     rule_types = {f["rule_type"] for f in findings}
     assert "wildcard_permissions" in rule_types
     assert "segmentation_violation" in rule_types
+
+# ── token_automount (CIS 5.1.6) ──────────────────────────────────────────────
+
+_EMPTY_RBAC = {"roles": [], "cluster_roles": [], "role_bindings": [], "cluster_role_bindings": []}
+
+
+def _sa(name, namespace="team-a", **kwargs):
+    sa = {"name": name, "namespace": namespace, "kind": "ServiceAccount"}
+    sa.update(kwargs)
+    return sa
+
+
+def _pod(name, sa_name, automount, namespace="team-a"):
+    return {
+        "name": name, "namespace": namespace, "kind": "Pod",
+        "service_account_name": sa_name,
+        "automountServiceAccountToken": automount,
+    }
+
+
+def _automount_findings(graph):
+    return [f for f in evaluate_rbac_findings(graph, _CONTEXT) if f["rule_type"] == "token_automount"]
+
+
+def test_automount_absent_field_fires():
+    # Field entirely absent → Kubernetes defaults to true → must fire.
+    graph = {**_EMPTY_RBAC, "service_accounts": [_sa("app")], "pods": []}
+    findings = _automount_findings(graph)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "LOW"
+    assert findings[0]["service_account"] == {"name": "app", "namespace": "team-a"}
+
+
+def test_automount_null_value_fires():
+    # `automountServiceAccountToken:` with no value parses as None → still unset → fires.
+    graph = {**_EMPTY_RBAC, "pods": [],
+             "service_accounts": [_sa("app", automountServiceAccountToken=None)]}
+    assert len(_automount_findings(graph)) == 1
+
+
+def test_automount_explicit_true_fires():
+    graph = {**_EMPTY_RBAC, "pods": [],
+             "service_accounts": [_sa("app", automountServiceAccountToken=True)]}
+    assert len(_automount_findings(graph)) == 1
+
+
+def test_automount_explicit_false_does_not_fire():
+    graph = {**_EMPTY_RBAC, "pods": [],
+             "service_accounts": [_sa("app", automountServiceAccountToken=False)]}
+    assert _automount_findings(graph) == []
+
+
+def test_automount_default_sa_scores_medium():
+    graph = {**_EMPTY_RBAC, "pods": [], "service_accounts": [_sa("default")]}
+    findings = _automount_findings(graph)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "MEDIUM"
+    assert findings[0]["remediation"]["benchmark_refs"][0]["id"] == "5.1.6"
+
+
+def test_automount_pod_override_of_opted_out_sa_fires():
+    # Pod spec wins over the SA object: true on the pod re-exposes the token.
+    graph = {**_EMPTY_RBAC,
+             "service_accounts": [_sa("locked", automountServiceAccountToken=False)],
+             "pods": [_pod("sneaky", "locked", True)]}
+    findings = _automount_findings(graph)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "MEDIUM"
+    assert findings[0]["workload"] == {"kind": "Pod", "name": "sneaky", "namespace": "team-a"}
+
+
+def test_automount_pod_explicit_false_does_not_fire():
+    graph = {**_EMPTY_RBAC,
+             "service_accounts": [_sa("locked", automountServiceAccountToken=False)],
+             "pods": [_pod("quiet", "locked", False)]}
+    assert _automount_findings(graph) == []
+
+
+def test_automount_pod_inheriting_sa_not_double_reported():
+    # SA fires once; a pod that merely inherits (unset) must not add a second finding.
+    graph = {**_EMPTY_RBAC,
+             "service_accounts": [_sa("app", automountServiceAccountToken=True)],
+             "pods": [_pod("worker", "app", None)]}
+    assert len(_automount_findings(graph)) == 1
+
+
+def test_automount_graph_without_new_keys_is_backward_compatible():
+    # Graphs from older collectors have no service_accounts/pods keys — no crash, no findings.
+    assert _automount_findings(dict(_EMPTY_RBAC)) == []
+
+
+def test_automount_workload_template_override_fires_with_kind():
+    # A Deployment's pod template setting true over an opted-out SA must fire,
+    # and the finding must carry the workload's real kind.
+    graph = {**_EMPTY_RBAC,
+             "service_accounts": [_sa("locked", automountServiceAccountToken=False)],
+             "pods": [{"name": "web", "namespace": "team-a", "kind": "Deployment",
+                       "service_account_name": "locked",
+                       "automountServiceAccountToken": True}]}
+    findings = _automount_findings(graph)
+    assert len(findings) == 1
+    assert findings[0]["workload"]["kind"] == "Deployment"
+    assert findings[0]["title"] == "Token Automount via Deployment 'web'"

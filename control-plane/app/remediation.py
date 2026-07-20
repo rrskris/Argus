@@ -44,6 +44,9 @@ _CIS_REFS = {
     "workload_creation": [
         {"benchmark": CIS_BENCHMARK, "id": "5.1.4", "title": "Minimize access to create pods"},
     ],
+    "token_automount": [
+        {"benchmark": CIS_BENCHMARK, "id": "5.1.6", "title": "Ensure that Service Account Tokens are only mounted where necessary"},
+    ],
     "pv_creation": [
         {"benchmark": CIS_BENCHMARK, "id": "5.1.9", "title": "Minimize access to create persistent volumes"},
     ],
@@ -124,6 +127,11 @@ _RBAC_ACTIONS = {
         "Remove create on persistentvolumes from {role}; provision storage via "
         "PersistentVolumeClaims and StorageClasses. Direct PV creation enables "
         "hostPath mounts onto node filesystems."
+    ),
+    "token_automount": (
+        "Set automountServiceAccountToken: false on the ServiceAccount (and on "
+        "pod specs that do not call the Kubernetes API). Create a dedicated "
+        "ServiceAccount with automount enabled only for workloads that need it."
     ),
     "segmentation_violation": (
         "Replace the ClusterRoleBinding with a namespaced RoleBinding scoped to "
@@ -221,7 +229,18 @@ def _build_rbac_remediation(finding: dict) -> dict:
     rule_type = finding.get("rule_type", "")
     role = finding.get("role") or {}
     binding = finding.get("binding") or {}
-    role_desc = f"{role.get('kind', 'Role')} '{role.get('name', '?')}'"
+    if rule_type == "token_automount":
+        # These findings target a ServiceAccount / Pod, not a Role/Binding.
+        sa = finding.get("service_account") or {}
+        workload = finding.get("workload")
+        role_desc = (
+            f"{workload.get('kind', 'Pod')} '{workload.get('name', '?')}'"
+            if workload else f"ServiceAccount '{sa.get('name', '?')}'"
+        )
+        if (workload or sa).get("namespace"):
+            role_desc += f" in namespace '{(workload or sa)['namespace']}'"
+    else:
+        role_desc = f"{role.get('kind', 'Role')} '{role.get('name', '?')}'"
     role_arg = f"{(role.get('kind') or 'role').lower()} {role.get('name', '')}".strip()
 
     binding_cmd = f"kubectl delete {(binding.get('kind') or 'rolebinding').lower()} {binding.get('name', '')}"
@@ -239,10 +258,14 @@ def _build_rbac_remediation(finding: dict) -> dict:
         benchmark_refs.append(_SYSTEM_MASTERS_REF)
 
     compliance_scope = (finding.get("score_factors") or {}).get("compliance_scope", {}).get("value") or []
+    change_desc = (
+        f"the automount opt-out for {role_desc}" if rule_type == "token_automount"
+        else f"the narrowing of {role_desc}"
+    )
     audit_note = (
-        f"Record the narrowing of {role_desc} as access-review evidence for "
+        f"Record {change_desc} as access-review evidence for "
         f"{', '.join(compliance_scope)} audit scope." if compliance_scope
-        else f"Record the narrowing of {role_desc} in your access-review log."
+        else f"Record {change_desc} in your access-review log."
     )
 
     return {

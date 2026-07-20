@@ -19,6 +19,7 @@ classification × compliance scope × exposure). Benchmark citations are to the
 | `broad_secrets_access` | `secrets` + any of get/list/watch | HIGH (ClusterRole) / MEDIUM (Role) | CIS 5.1.2 |
 | `exec_attach_grant` | `pods/exec`, `pods/attach`, or `pods/portforward` + create/get | MEDIUM | RBAC Good Practices, OWASP K03 (no CIS 5.1 control exists) |
 | `privilege_escalation_verbs` | any of `escalate`, `bind`, `impersonate` | HIGH (ClusterRole) / MEDIUM (Role) | CIS 5.1.8 |
+| `token_automount` | ServiceAccount with `automountServiceAccountToken` unset/null/true (`default` SA → MEDIUM, others LOW), or a workload (Pod, or the pod template of a Deployment/StatefulSet/DaemonSet/ReplicaSet/Job/CronJob) setting it `true` over an SA that opted out (MEDIUM) | MEDIUM / LOW | CIS 5.1.6 |
 | `token_creation` | `serviceaccounts/token` + create | HIGH (ClusterRole) / MEDIUM (Role) | CIS 5.1.13 |
 | `workload_creation` | create on pods/deployments/daemonsets/statefulsets/replicasets/jobs/cronjobs | MEDIUM | CIS 5.1.4 |
 | `node_proxy_access` | `nodes/proxy` (ClusterRole only) | HIGH | CIS 5.1.10 |

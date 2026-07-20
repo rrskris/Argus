@@ -12,6 +12,12 @@
 #  10. sneaky-masters      → cluster_admin_binding (user binding to system:masters)
 #  11. safe-viewer         → must produce ZERO findings
 #  12. cross-ns-reader     → segmentation_violation (namespaced SA bound cluster-wide)
+#  13. default SA (automount unset)        → token_automount (MEDIUM)
+#  14. token-happy SA (automount: true)    → token_automount (LOW)
+#  15. locked-down SA (automount: false)   → must produce ZERO automount findings
+#  16. override-pod (pod true over SA false) → token_automount (MEDIUM)
+#  17. quiet-pod (pod automount: false)    → must produce ZERO automount findings
+#  18. override-deploy (template true over SA false) → token_automount (MEDIUM)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -276,3 +282,72 @@ subjects:
   - kind: ServiceAccount
     name: prometheus-sa
     namespace: monitoring
+---
+# 13. default SA that never opts out — fires (MEDIUM: it's the default SA)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: default
+  namespace: fixture-ns
+---
+# 14. explicit true — fires (LOW)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: token-happy
+  namespace: fixture-ns
+automountServiceAccountToken: true
+---
+# 15. explicit false — the desired state, no finding
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: locked-down
+  namespace: fixture-ns
+automountServiceAccountToken: false
+---
+# 16. pod re-enables automount over an opted-out SA — fires (MEDIUM)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: override-pod
+  namespace: fixture-ns
+spec:
+  serviceAccountName: locked-down
+  automountServiceAccountToken: true
+  containers:
+    - name: app
+      image: registry.example.com/app:1.0
+---
+# 17. pod explicitly opts out — no finding
+apiVersion: v1
+kind: Pod
+metadata:
+  name: quiet-pod
+  namespace: fixture-ns
+spec:
+  serviceAccountName: locked-down
+  automountServiceAccountToken: false
+  containers:
+    - name: app
+      image: registry.example.com/app:1.0
+---
+# 18. Deployment pod template re-enables automount over an opted-out SA — fires (MEDIUM)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: override-deploy
+  namespace: fixture-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: override-deploy}
+  template:
+    metadata:
+      labels: {app: override-deploy}
+    spec:
+      serviceAccountName: locked-down
+      automountServiceAccountToken: true
+      containers:
+        - name: app
+          image: registry.example.com/app:1.0

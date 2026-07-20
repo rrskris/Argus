@@ -62,6 +62,23 @@ _DEFAULT_CONTEXT = {
 }
 
 _RBAC_KINDS = {"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"}
+_TOKEN_AUTOMOUNT_KINDS = {"ServiceAccount", "Pod"}
+# Workload kinds whose pod template can override automountServiceAccountToken.
+_WORKLOAD_TEMPLATE_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob"}
+
+
+def _finding_target(f: dict) -> dict:
+    """Uniform exporter target: binding-based findings point at the binding;
+    token_automount findings point at the workload or ServiceAccount instead."""
+    binding = f.get("binding")
+    if binding:
+        return {**binding, "api_version": "rbac.authorization.k8s.io/v1"}
+    target = f.get("workload") or f.get("service_account") or {}
+    kind = target.get("kind", "ServiceAccount")
+    api_version = "apps/v1" if kind in _WORKLOAD_TEMPLATE_KINDS else (
+        "batch/v1" if kind in {"Job", "CronJob"} else "v1")
+    return {"kind": kind, "name": target.get("name"),
+            "namespace": target.get("namespace"), "api_version": api_version}
 
 
 def _fail_usage(message: str) -> None:
@@ -166,10 +183,14 @@ def build_graph_from_manifests(path_str: str) -> dict:
     except PermissionError:
         _fail_unreadable_manifests(path_str)
 
-    graph = {"roles": [], "cluster_roles": [], "role_bindings": [], "cluster_role_bindings": []}
+    graph = {
+        "roles": [], "cluster_roles": [], "role_bindings": [], "cluster_role_bindings": [],
+        "service_accounts": [], "pods": [],
+    }
     for doc in _iter_manifest_docs(root):
         kind = doc.get("kind")
-        if kind not in _RBAC_KINDS:
+        if (kind not in _RBAC_KINDS and kind not in _TOKEN_AUTOMOUNT_KINDS
+                and kind not in _WORKLOAD_TEMPLATE_KINDS):
             continue
         meta = doc.get("metadata") or {}
         if kind == "Role":
@@ -193,6 +214,31 @@ def build_graph_from_manifests(path_str: str) -> dict:
                 "name": meta.get("name"), "kind": "ClusterRoleBinding",
                 "roleRef": doc.get("roleRef") or {},
                 "subjects": doc.get("subjects") or [],
+            })
+        elif kind == "ServiceAccount":
+            graph["service_accounts"].append({
+                "name": meta.get("name"), "namespace": meta.get("namespace"),
+                "kind": "ServiceAccount",
+                "automountServiceAccountToken": doc.get("automountServiceAccountToken"),
+            })
+        elif kind == "Pod":
+            spec = doc.get("spec") or {}
+            graph["pods"].append({
+                "name": meta.get("name"), "namespace": meta.get("namespace"), "kind": "Pod",
+                "service_account_name": spec.get("serviceAccountName"),
+                "automountServiceAccountToken": spec.get("automountServiceAccountToken"),
+            })
+        elif kind in _WORKLOAD_TEMPLATE_KINDS:
+            # The pod template carries the automount override, so a Deployment
+            # setting it true re-exposes tokens exactly like a bare Pod would.
+            spec = doc.get("spec") or {}
+            if kind == "CronJob":
+                spec = ((spec.get("jobTemplate") or {}).get("spec") or {})
+            pod_spec = ((spec.get("template") or {}).get("spec") or {})
+            graph["pods"].append({
+                "name": meta.get("name"), "namespace": meta.get("namespace"), "kind": kind,
+                "service_account_name": pod_spec.get("serviceAccountName"),
+                "automountServiceAccountToken": pod_spec.get("automountServiceAccountToken"),
             })
     return graph
 
@@ -232,7 +278,7 @@ def _print_table(result: dict) -> None:
         print("No RBAC misconfigurations found.")
         return
     for f in findings:
-        binding = f["binding"]
+        binding = _finding_target(f)
         location = f" -n {binding['namespace']}" if binding.get("namespace") else ""
         print(f"[{f['severity']:>8}] risk={f['contextual_score']:<7} {f['title']}")
         print(f"           via {binding['kind']} {binding['name']}{location}")
@@ -312,7 +358,7 @@ def _print_sarif(result: dict) -> None:
     sarif_results = []
     for row in rows:
         f = row["raw"]
-        binding = f["binding"]
+        binding = _finding_target(f)
         location_name = binding.get("namespace") or "cluster-scoped"
         cis_refs = [
             {"benchmark": r["benchmark"], "id": r.get("id")}
@@ -374,7 +420,7 @@ def _print_junit(result: dict) -> None:
         })
     else:
         for row in rows:
-            binding = row["raw"]["binding"]
+            binding = _finding_target(row["raw"])
             location = binding.get("namespace") or "cluster-scoped"
             testcase = ET.SubElement(testsuite, "testcase", {
                 "classname": f"kaaval.rbac.{row['rule_id']}",
@@ -408,14 +454,14 @@ _SEVERITY_TO_POLICYREPORT = {
 
 
 def _policyreport_result(f: dict) -> dict:
-    binding = f["binding"]
+    binding = _finding_target(f)
     rem = f["remediation"]
     refs = "; ".join(
         f"{r['benchmark']}{' ' + r['id'] if r.get('id') else ''}"
         for r in rem["benchmark_refs"]
     )
     resource = {
-        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "apiVersion": binding.get("api_version", "rbac.authorization.k8s.io/v1"),
         "kind": binding["kind"],
         "name": binding["name"],
     }
@@ -448,7 +494,7 @@ def _build_policy_reports(result: dict) -> list:
     by_namespace: dict = {}
     cluster_results: list = []
     for f in result["findings"]:
-        ns = f["binding"].get("namespace")
+        ns = _finding_target(f).get("namespace")
         if ns:
             by_namespace.setdefault(ns, []).append(_policyreport_result(f))
         else:

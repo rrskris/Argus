@@ -322,6 +322,67 @@ def _broad_identity_in(subjects: list) -> Optional[str]:
     return None
 
 
+def _effective_automount(value) -> bool:
+    """Kubernetes defaults automountServiceAccountToken to true when unset.
+    A YAML key with no value (`automountServiceAccountToken:`) parses as None,
+    which is 'unset' — only an explicit false opts out."""
+    return value is not False
+
+
+def _evaluate_token_automount(graph: dict) -> list[dict]:
+    """CIS 5.1.6 — Service Account Tokens are only mounted where necessary.
+
+    Flags:
+    * ServiceAccounts whose effective automount is true (unset/null/true).
+      The `default` SA scores MEDIUM — it exists in every namespace and is the
+      token most often mounted without being used; other SAs score LOW.
+    * Pods that set automountServiceAccountToken: true, re-enabling automount
+      on a ServiceAccount that explicitly opted out (pod spec overrides the SA).
+      Pods that merely inherit an SA's automount are not double-reported.
+    """
+    risks = []
+    sa_automount: dict[tuple, object] = {}
+    for sa in graph.get("service_accounts", []):
+        value = sa.get("automountServiceAccountToken")
+        sa_automount[(sa.get("namespace"), sa.get("name"))] = value
+        if _effective_automount(value):
+            reason = (
+                "sets automountServiceAccountToken: true"
+                if value is True
+                else "does not set automountServiceAccountToken (Kubernetes defaults it to true)"
+            )
+            risks.append({
+                "rule_type": "token_automount",
+                "severity": "MEDIUM" if sa.get("name") == "default" else "LOW",
+                "detail": (
+                    f"ServiceAccount '{sa.get('name')}' in namespace "
+                    f"'{sa.get('namespace')}' {reason}; every pod using it "
+                    "automounts an API token whether or not the workload needs one."
+                ),
+                "service_account": {"name": sa.get("name"), "namespace": sa.get("namespace")},
+            })
+
+    for pod in graph.get("pods", []):
+        if pod.get("automountServiceAccountToken") is not True:
+            # Explicit false is the desired state; unset inherits the SA, which
+            # the SA-level finding above already covers.
+            continue
+        sa_name = pod.get("service_account_name") or "default"
+        if sa_automount.get((pod.get("namespace"), sa_name)) is False:
+            risks.append({
+                "rule_type": "token_automount",
+                "severity": "MEDIUM",
+                "detail": (
+                    f"{pod.get('kind', 'Pod')} '{pod.get('name')}' in namespace '{pod.get('namespace')}' sets "
+                    f"automountServiceAccountToken: true, overriding ServiceAccount "
+                    f"'{sa_name}' which explicitly disables it (pod spec wins over the SA)."
+                ),
+                "service_account": {"name": sa_name, "namespace": pod.get("namespace")},
+                "workload": {"kind": pod.get("kind", "Pod"), "name": pod.get("name"), "namespace": pod.get("namespace")},
+            })
+    return risks
+
+
 def evaluate_rbac_findings(graph: dict, context: dict) -> list[dict]:
     """
     Pure function: given the RBAC graph shape from K8sClient.get_rbac_graph_data()
@@ -398,6 +459,26 @@ def evaluate_rbac_findings(graph: dict, context: dict) -> list[dict]:
             finding["remediation"] = build_remediation(finding)
             findings.append(finding)
 
+    # Token-automount findings come from pod/ServiceAccount specs, not bindings.
+    for risk in _evaluate_token_automount(graph):
+        contextual_score, score_factors = compute_contextual_score(None, risk["severity"], context)
+        target = risk.get("workload") or risk["service_account"]
+        target_kind = target.get("kind") if risk.get("workload") else "ServiceAccount"
+        finding = {
+            "rule_type": risk["rule_type"],
+            "severity": risk["severity"],
+            "title": f"Token Automount via {target_kind} '{target.get('name')}'",
+            "description": risk["detail"],
+            "service_account": risk["service_account"],
+            "subjects": [],
+            "contextual_score": contextual_score,
+            "score_factors": score_factors,
+        }
+        if risk.get("workload"):
+            finding["workload"] = risk["workload"]
+        finding["remediation"] = build_remediation(finding)
+        findings.append(finding)
+
     findings.sort(key=lambda f: -f["contextual_score"])
     return findings
 
@@ -462,8 +543,11 @@ def get_latest_rbac_scan(db: Session) -> Optional[dict]:
 
 
 def _finding_key(finding: dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    role = finding.get("role") or {}
-    binding = finding.get("binding") or {}
+    # Binding-based findings key on (rule, role, binding); token_automount
+    # findings have no role/binding, so key on the SA / workload instead —
+    # otherwise every automount finding would collide in the scan diff.
+    role = finding.get("role") or finding.get("service_account") or {}
+    binding = finding.get("binding") or finding.get("workload") or {}
     return finding.get("rule_type"), role.get("name"), binding.get("name")
 
 
