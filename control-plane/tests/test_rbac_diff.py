@@ -73,7 +73,7 @@ def test_diff_latest_scans_reports_added_resolved_and_unchanged_findings():
         "wildcard_permissions",
         "shared-role",
         "shared-binding",
-        severity="HIGH",
+        severity="CRITICAL",
     )
     resolved = _finding("exec_attach_grant", "old-role", "old-binding")
     db = _db(
@@ -88,7 +88,43 @@ def test_diff_latest_scans_reports_added_resolved_and_unchanged_findings():
     assert result == {
         "added": [added],
         "resolved": [resolved],
+        "severity_changed": [],
         "unchanged_count": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("previous_severity", "latest_severity"),
+    [("HIGH", "CRITICAL"), ("CRITICAL", "HIGH")],
+)
+def test_diff_latest_scans_reports_severity_changes(
+    previous_severity, latest_severity
+):
+    previous = _finding(
+        "wildcard_permissions",
+        "shared-role",
+        "shared-binding",
+        severity=previous_severity,
+    )
+    latest = _finding(
+        "wildcard_permissions",
+        "shared-role",
+        "shared-binding",
+        severity=latest_severity,
+    )
+
+    result = diff_latest_scans(_db([_scan([latest]), _scan([previous])]))
+
+    assert result == {
+        "added": [],
+        "resolved": [],
+        "severity_changed": [
+            {
+                "finding": latest,
+                "previous_severity": previous_severity,
+            }
+        ],
+        "unchanged_count": 0,
     }
 
 
@@ -97,6 +133,7 @@ def test_diff_latest_scans_handles_fewer_than_two_scans(scans):
     assert diff_latest_scans(_db(scans)) == {
         "added": [],
         "resolved": [],
+        "severity_changed": [],
         "unchanged_count": 0,
     }
 
@@ -109,6 +146,7 @@ def test_diff_latest_scans_treats_missing_findings_as_empty():
     assert result == {
         "added": [added],
         "resolved": [],
+        "severity_changed": [],
         "unchanged_count": 0,
     }
 
@@ -138,6 +176,7 @@ def test_diff_latest_scans_collapses_duplicate_finding_keys():
 
     assert result["added"] == [newer_duplicate]
     assert result["resolved"] == []
+    assert result["severity_changed"] == []
     assert result["unchanged_count"] == 0
 
 
@@ -171,6 +210,7 @@ def test_get_rbac_scan_diff_api_returns_service_contract(api_app):
     assert response.json() == {
         "added": [added],
         "resolved": [resolved],
+        "severity_changed": [],
         "unchanged_count": 1,
     }
 
@@ -185,5 +225,6 @@ def test_get_rbac_scan_diff_api_handles_no_scan_history(api_app):
     assert response.json() == {
         "added": [],
         "resolved": [],
+        "severity_changed": [],
         "unchanged_count": 0,
     }

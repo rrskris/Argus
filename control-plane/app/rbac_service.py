@@ -476,7 +476,12 @@ def diff_latest_scans(db: Session) -> dict:
         .all()
     )
     if len(scans) < 2:
-        return {"added": [], "resolved": [], "unchanged_count": 0}
+        return {
+            "added": [],
+            "resolved": [],
+            "severity_changed": [],
+            "unchanged_count": 0,
+        }
 
     latest, previous = scans
     latest_findings = latest.findings if isinstance(latest.findings, list) else []
@@ -487,6 +492,15 @@ def diff_latest_scans(db: Session) -> dict:
     previous_by_key = {
         _finding_key(finding): finding for finding in previous_findings
     }
+    severity_changed = [
+        {
+            "finding": finding,
+            "previous_severity": previous_by_key[key].get("severity"),
+        }
+        for key, finding in latest_by_key.items()
+        if key in previous_by_key
+        and finding.get("severity") != previous_by_key[key].get("severity")
+    ]
 
     return {
         "added": [
@@ -499,5 +513,10 @@ def diff_latest_scans(db: Session) -> dict:
             for key, finding in previous_by_key.items()
             if key not in latest_by_key
         ],
-        "unchanged_count": len(latest_by_key.keys() & previous_by_key.keys()),
+        "severity_changed": severity_changed,
+        "unchanged_count": sum(
+            finding.get("severity") == previous_by_key[key].get("severity")
+            for key, finding in latest_by_key.items()
+            if key in previous_by_key
+        ),
     }
